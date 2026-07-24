@@ -12,13 +12,15 @@
   --radius:12px;
 }
 *{box-sizing:border-box}
-html,body{margin:0; height:100%}
+/* 実機モバイルでは 100vh がアドレスバー裏に隠れて下端が切れるため、
+   動的ビューポート単位(dvh)を使う。100vh は非対応ブラウザ向けのフォールバック。 */
+html,body{margin:0; height:100vh; height:100dvh; overflow:hidden}
 body{
   background:radial-gradient(1200px 700px at 30% -10%, #1b2430 0%, var(--bg) 55%) fixed;
   color:var(--text);
   font-family:"Hiragino Kaku Gothic ProN","Yu Gothic UI","Meiryo",system-ui,sans-serif;
   font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;
-  height:100vh; overflow:hidden; display:flex; flex-direction:column;
+  height:100vh; height:100dvh; overflow:hidden; display:flex; flex-direction:column;
 }
 button{font-family:inherit}
 h1,h2,h3{margin:0}
@@ -39,6 +41,12 @@ h1,h2,h3{margin:0}
 .ctrl label{color:var(--muted); font-size:12px}
 .speedval{width:44px; text-align:right; color:var(--muted); font-size:12px}
 input[type=range]{accent-color:var(--gold); width:104px; vertical-align:middle}
+
+/* 二次操作メニュー: PCでは display:contents で従来通りインライン展開（レイアウト不変）。
+   スマホでは「⋯」ボタン＋ドロップダウンに切替（下のスマホ用ルールで上書き）。 */
+.menuwrap{display:contents}
+.menu{display:contents}
+.btn.menubtn{display:none}   /* .icbtn より高い詳細度で確実に隠す（PCでは非表示）*/
 
 /* ---------- ボタン ---------- */
 .btn{border:1px solid var(--line); background:var(--panel2); color:var(--text); border-radius:9px;
@@ -66,7 +74,9 @@ body[data-mode="mobile"] .appmain{
   grid-template-columns:1fr;
   grid-template-rows:auto minmax(0,1fr) auto;
   grid-template-areas:"board" "panels" "hand";
-  gap:8px; padding:8px;
+  gap:8px;
+  /* 下端に safe-area を確保: 固定された手札/操作が iOS ホームインジケータに隠れないように */
+  padding:8px calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
 }
 
 /* ---------- 盤面 ---------- */
@@ -78,7 +88,7 @@ svg#board{display:block}
 body[data-mode="pc"] .boardwrap{flex:1; min-width:0; min-height:0}
 body[data-mode="pc"] svg#board{width:100%; height:100%}
 body[data-mode="mobile"] .boardwrap{flex:0 0 auto; width:100%}
-body[data-mode="mobile"] svg#board{width:100%; height:auto; max-height:40vh}
+body[data-mode="mobile"] svg#board{width:100%; height:auto; max-height:40vh; max-height:40dvh}
 
 .hexface{stroke:#0b0e12; stroke-width:1.2}
 .token{fill:#f2ead2; stroke:#0b0e12; stroke-width:1}
@@ -121,6 +131,10 @@ body[data-mode="mobile"] .tabpanel.active .panel,
 body[data-mode="mobile"] .tabpanel.active #evalPanel{height:100%; display:flex; flex-direction:column; min-height:0}
 body[data-mode="mobile"] #gameLog,
 body[data-mode="mobile"] #evalList{flex:1; min-height:0; overflow:auto}
+/* 状況/銀行/相手タブも内部スクロール（ページはスクロールさせない） */
+body[data-mode="mobile"] .tp-status.active .statusbar{flex:1; min-height:0; overflow:auto}
+body[data-mode="mobile"] .tp-bank.active .panel,
+body[data-mode="mobile"] .tp-opp.active .panel{overflow:auto}
 
 /* 状況 */
 .statusbar{background:linear-gradient(90deg,var(--panel),var(--panel2)); border:1px solid var(--line);
@@ -210,7 +224,7 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 #startScreen{position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
   padding:16px; background:rgba(8,12,17,.72); backdrop-filter:blur(4px)}
 #startScreen.hidden{display:none}
-.startcard{width:min(560px,96%); max-height:94vh; overflow:auto; background:var(--panel); border:1px solid var(--line);
+.startcard{width:min(560px,96%); max-height:94vh; max-height:94dvh; overflow:auto; background:var(--panel); border:1px solid var(--line);
   border-radius:16px; padding:20px 22px; box-shadow:0 20px 60px rgba(0,0,0,.5)}
 .startseg{display:flex; align-items:center; gap:6px; margin-bottom:8px}
 .startseg .sl{color:var(--muted); font-size:12px; width:52px}
@@ -246,7 +260,7 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 #rvEvents > div{padding:1px 0}
 
 /* ---------- トースト ---------- */
-.toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%) translateY(20px);
+.toast{position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%) translateY(20px);
   background:#20283a; color:#eaf0fb; border:1px solid var(--gold); padding:10px 17px; border-radius:12px;
   font-size:13px; opacity:0; pointer-events:none; transition:.25s; z-index:60; max-width:82vw; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.4)}
 .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
@@ -254,22 +268,80 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 .hidden{display:none !important}
 .hint{color:var(--faint); font-size:12px}
 
-/* ---------- スマホモードの詰め込み調整（トップバー1行・操作は横スクロール） ---------- */
-body[data-mode="mobile"] .topbar{flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; gap:8px; padding:6px 10px}
-body[data-mode="mobile"] .topbar::-webkit-scrollbar{height:0}
+/* ============================================================
+   スマホモード: コンパクトなトップバー / 下部固定の手札・操作
+   ============================================================ */
+
+/* --- トップバー: 主要操作（一時停止・AI速度・AI評価値）は常時表示。
+       二次操作（棋譜/新規/表示/言語）は「⋯」メニューに格納。横スクロールなし。 --- */
+body[data-mode="mobile"] .topbar{
+  flex-wrap:nowrap; overflow:visible; gap:8px;
+  padding:calc(6px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) 6px calc(10px + env(safe-area-inset-left));
+}
+body[data-mode="mobile"] .brand{display:none}
 body[data-mode="mobile"] .topbar .spacer{display:none}
-body[data-mode="mobile"] .brand .sub{display:none}
-body[data-mode="mobile"] .brand h1{font-size:15px; white-space:nowrap}
-body[data-mode="mobile"] .ctrl{flex-wrap:nowrap; gap:6px}
-body[data-mode="mobile"] .ctrl .grp{flex:0 0 auto}
-body[data-mode="mobile"] .ctrl .btn{flex:0 0 auto}
-body[data-mode="mobile"] input[type=range]{width:78px}
-body[data-mode="mobile"] svg#board{max-height:35vh}
+body[data-mode="mobile"] .ctrl{flex:1; flex-wrap:nowrap; gap:6px; min-width:0}
+body[data-mode="mobile"] .ctrl .grp{flex:0 0 auto; padding:3px 8px; gap:5px}
+body[data-mode="mobile"] .ctrl .grp label{display:none}   /* 「AI速度」ラベルは省略（スライダー＝速度）*/
+body[data-mode="mobile"] input[type=range]{width:74px}
+body[data-mode="mobile"] .speedval{width:38px; font-size:11px}
+body[data-mode="mobile"] .icbtn{width:40px; height:40px; font-size:16px}
+body[data-mode="mobile"] #evalBtn{flex:0 0 auto; min-height:40px; padding:6px 10px; font-size:12px; white-space:nowrap}
+
+/* 「⋯」メニュー（スマホのみドロップダウン化） */
+body[data-mode="mobile"] .menuwrap{display:flex; position:relative; margin-left:auto; flex:0 0 auto}
+body[data-mode="mobile"] .menubtn{display:inline-flex}
+body[data-mode="mobile"] .menu{
+  position:absolute; top:calc(100% + 8px); right:0; z-index:45;
+  display:none; flex-direction:column; align-items:stretch; gap:6px;
+  min-width:196px; padding:8px; border-radius:12px;
+  background:var(--panel); border:1px solid var(--line); box-shadow:0 14px 34px rgba(0,0,0,.55);
+}
+body[data-mode="mobile"] .menu.open{display:flex}
+body[data-mode="mobile"] .menu .btn{width:100%; text-align:left; min-height:40px}
+
+/* --- 盤面: 幅にフィット、高さは svh でツールバー表示時も常に収める --- */
+body[data-mode="mobile"] svg#board{max-height:40vh; max-height:36svh}
+
+/* --- タブ: タップしやすく --- */
+body[data-mode="mobile"] .tabbtn{min-height:40px; padding:6px 4px; font-size:12px}
+
+/* --- 手札バー（コンパクト・下部固定） --- */
 body[data-mode="mobile"] .handbar{padding:8px 10px}
-body[data-mode="mobile"] .actions{flex-wrap:nowrap; overflow-x:auto; padding-bottom:3px; gap:6px}
+body[data-mode="mobile"] .handhead{margin-bottom:6px; gap:6px}
+body[data-mode="mobile"] .handhead .ht{display:none}          /* 「あなたの手札」見出しは省略（meStatにP#表示あり）*/
+body[data-mode="mobile"] #meStat{font-size:11px; gap:3px}
+body[data-mode="mobile"] #meStat .vpn{font-size:14px}
+body[data-mode="mobile"] #meStat .sep{margin-left:6px}
+body[data-mode="mobile"] .cards{gap:6px; flex-wrap:nowrap; justify-content:space-between}
+body[data-mode="mobile"] .rescard{width:52px}
+body[data-mode="mobile"] .rescard .top{height:22px; font-size:11px}
+body[data-mode="mobile"] .rescard .cnt{font-size:15px; padding:2px 0}
+body[data-mode="mobile"] .devcards{flex-wrap:nowrap; overflow-x:auto; margin-top:6px; gap:6px}
+body[data-mode="mobile"] .devcards > *{flex:0 0 auto}
+body[data-mode="mobile"] .devchip{padding:4px 8px; font-size:11px}
+
+/* --- 操作ボタン: 横スクロール可・主要（サイコロ／ターン終了）を先頭に --- */
+body[data-mode="mobile"] .actions{flex-wrap:nowrap; overflow-x:auto; margin-top:7px; padding-bottom:3px; gap:6px}
 body[data-mode="mobile"] .actions::-webkit-scrollbar{height:5px}
 body[data-mode="mobile"] .actions::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px}
-body[data-mode="mobile"] .actions > *{flex:0 0 auto}
-body[data-mode="mobile"] .devcards{flex-wrap:nowrap; overflow-x:auto}
-body[data-mode="mobile"] .devcards > *{flex:0 0 auto}
-body[data-mode="mobile"] .prompt{max-height:64px; overflow:auto}
+body[data-mode="mobile"] .actions > *{flex:0 0 auto; order:5}
+body[data-mode="mobile"] .actions .btn{min-height:40px; padding:8px 12px; font-size:12.5px}
+body[data-mode="mobile"] .actions #rollBtnU{order:1}
+body[data-mode="mobile"] .actions #endTurnU{order:2}
+body[data-mode="mobile"] .trade{flex:0 0 auto; padding:3px 6px; gap:4px}
+body[data-mode="mobile"] .trade select{padding:5px 6px; font-size:12px}
+body[data-mode="mobile"] .prompt{margin-top:7px; max-height:48px; overflow:auto; font-size:11.5px; padding:6px 9px}
+
+/* --- 縦が短い端末（例: 360x640 / 390x664）向けの追い込み: 盤面と手札を少し詰め、
+       情報パネル(タブ内容)に確実に高さを残す --- */
+@media (max-height:720px){
+  body[data-mode="mobile"] svg#board{max-height:34svh}
+  body[data-mode="mobile"] .handbar{padding:6px 10px}
+  body[data-mode="mobile"] .handhead{margin-bottom:4px}
+  body[data-mode="mobile"] .rescard .top{height:20px}
+  body[data-mode="mobile"] .rescard .cnt{font-size:14px; padding:1px 0}
+  body[data-mode="mobile"] .devcards{margin-top:4px}
+  body[data-mode="mobile"] .actions{margin-top:6px}
+  body[data-mode="mobile"] .prompt{margin-top:6px; max-height:34px; padding:5px 9px}
+}

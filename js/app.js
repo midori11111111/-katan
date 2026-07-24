@@ -64,6 +64,7 @@ const I18N = {
     eval_wait_hint:`あなたの手番で、打てる手を点数付きで表示します。`,
     eval_plan:a=>`🎯 目標プラン: <b>${a.label}</b>${a.ore?'（鉄不足→木・土寄せ）':''}　<span class="hint">基準=「ターン終了」を ±0 とした相対点</span>`,
     eval_noplan:`候補手を評価値順に表示（+ が良い手／基準=「ターン終了」= ±0）`,
+    eval_seat:a=>`<span class="hint" style="display:block;margin-bottom:5px">▶ <b style="color:${PCOLORS[a.seat-1]}">P${a.seat}</b>（AI）の評価値</span>`,
     eval_place_note:`📍 初期配置の候補地（盤面の <b>①②③</b> と対応）。数値は最弱候補を基準にした相対点。`,
     eval_shortage:a=>`（資源不足${a.cost?': '+a.cost:''}）`,
     eval_cand:a=>`候補${a.mark} pip ${a.pip}／資源${a.div}種${a.port?'／港あり':''}`,
@@ -130,6 +131,7 @@ const I18N = {
     eval_wait_hint:`On your turn, shows your possible moves with scores.`,
     eval_plan:a=>`🎯 Target plan: <b>${a.label}</b>${a.ore?' (low ore → wood/brick)':''}　<span class="hint">relative to "End turn" = ±0</span>`,
     eval_noplan:`Moves ranked by score (+ = better / baseline "End turn" = ±0)`,
+    eval_seat:a=>`<span class="hint" style="display:block;margin-bottom:5px">▶ <b style="color:${PCOLORS[a.seat-1]}">P${a.seat}</b> (AI) eval</span>`,
     eval_place_note:`📍 Setup spots (match <b>①②③</b> on the board). Values are relative to the weakest spot.`,
     eval_shortage:a=>`(need${a.cost?': '+a.cost:''})`,
     eval_cand:a=>`Spot ${a.mark} · pip ${a.pip} · ${a.div} res${a.port?' · port':''}`,
@@ -290,7 +292,21 @@ function aiStep(){
   if(game.phase==="roll"){ if(_shouldPlayKnight(p)) playDev("knight"); if(game.phase==="roll") doRoll(null); refresh(); scheduleAI(650); return; }
   if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); refresh(); scheduleAI(550); return; }
   if(game.phase==="steal"){ stealFrom(game.stealCands[0]); refresh(); scheduleAI(450); return; }
-  if(game.phase==="main"){ _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); refresh(); scheduleAI(650); return; }
+  if(game.phase==="main"){
+    if(evalOn){
+      // AIの手番でも評価値を見せる: まず現在のAIの評価を描画し、速度ぶん待ってから打つ
+      refresh();
+      clearTimeout(aiTimer);
+      aiTimer=setTimeout(()=>{
+        if(paused){ aiBusy=false; return; }
+        _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame();
+        refresh(); scheduleAI(200);
+      }, aiDelay(650));
+    } else {
+      _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); refresh(); scheduleAI(650);
+    }
+    return;
+  }
   aiBusy=false;
 }
 function aiMaybeGo(){
@@ -458,20 +474,22 @@ function evLabel(label){
   return jaToEn(s);
 }
 function updateEval(){
-  const humanMain = game.phase==="main" && cur()===humanSeat;
+  const anyMain = game.phase==="main";                         // 誰の手番でも本編なら評価を出す（AI含む）
   const humanPlace = game.phase==="setup" && game.setup && game.setup.phase==="settle" && game.setup.queue[game.setup.step]===humanSeat;
+  const curSeat = cur();
+  const seatLbl = (anyMain && curSeat!==humanSeat) ? t("eval_seat",{seat:curSeat}) : "";
 
   const wantBest = evalOn && humanPlace;
   if(wantBest!==showBest){ showBest=wantBest; if(!_rerendering){ _rerendering=true; render(); _rerendering=false; } }
 
   const plan=$("evalPlan"), list=$("evalList");
   if(!evalOn){ plan.innerHTML=""; list.innerHTML=`<div class="hint">${t("eval_off_hint")}</div>`; return; }
-  if(!humanMain && !humanPlace){ plan.innerHTML=""; list.innerHTML=`<div class="hint">${t("eval_wait_hint")}</div>`; return; }
+  if(!anyMain && !humanPlace){ plan.innerHTML=""; list.innerHTML=`<div class="hint">${t("eval_wait_hint")}</div>`; return; }
 
-  if(humanMain){
+  if(anyMain){
     let adv; try{ adv=computeAdvice(); }catch(e){ adv=[]; }
     const pl=adv._plan;
-    plan.innerHTML = pl ? t("eval_plan",{label:pl.label, ore:pl.oreShort}) : t("eval_noplan");
+    plan.innerHTML = seatLbl + (pl ? t("eval_plan",{label:pl.label, ore:pl.oreShort}) : t("eval_noplan"));
     const base=0.5;
     const rows=adv.map(a=>({label:a.label,can:a.can,cost:a.cost,pts:Math.round((a.score-base)*10)/10})).sort((x,y)=>y.pts-x.pts).slice(0,8);
     const maxAbs=Math.max(1,...rows.map(r=>Math.abs(r.pts)));
@@ -581,7 +599,12 @@ function exportRecord(){
    ============================================================ */
 function updatePauseBtn(){ $("pauseBtn").textContent = paused?"▶":"⏸"; $("pauseBtn").title = paused?t("play_title"):t("pause_title"); }
 function togglePause(){ paused=!paused; updatePauseBtn(); if(paused){ clearTimeout(aiTimer); aiBusy=false; toast(t("toast_pause")); } else { toast(t("toast_play")); aiMaybeGo(); } }
-function updateEvalBtn(){ $("evalBtn").textContent = t("eval_word")+": "+(evalOn?"ON":"OFF"); $("evalBtn").classList.toggle("on", evalOn); }
+function updateEvalBtn(){
+  // スマホは幅が狭いのでラベルを短縮（「AI評価値」→「評価」/ "AI eval"→"Eval"）
+  const word = (uiMode==="mobile") ? (LANG==="en"?"Eval":"評価") : t("eval_word");
+  $("evalBtn").textContent = word+": "+(evalOn?"ON":"OFF");
+  $("evalBtn").classList.toggle("on", evalOn);
+}
 function toggleEval(){ evalOn=!evalOn; updateEvalBtn(); if(game) refresh(); }
 function setSpeed(v){ aiSpeedSec=v; $("speedLabel").textContent = v===0 ? (LANG==="en"?"Fastest":"最速") : v.toFixed(1)+(LANG==="en"?"s":"秒"); }
 function newMatch(){
@@ -598,8 +621,15 @@ function updateModeBtn(){ $("modeBtn").textContent = (uiMode==="pc")?t("mode_pc"
 function applyMode(){
   document.body.setAttribute("data-mode", uiMode);
   updateModeBtn();
+  updateEvalBtn();                 // ラベル長がモードで変わるため再適用
+  closeTopMenu();                  // モード切替時はメニューを閉じる
   if(uiMode==="mobile") setMobileTab(mobileTab||"status");
   if(game) refresh(); else render();
+}
+function closeTopMenu(){
+  const m=$("topMenu"), b=$("menuBtn");
+  if(m) m.classList.remove("open");
+  if(b) b.setAttribute("aria-expanded","false");
 }
 function toggleMode(){ uiMode = (uiMode==="pc")?"mobile":"pc"; applyMode(); }
 function setMobileTab(name){
@@ -701,6 +731,15 @@ function wireControls(){
   $("pauseBtn").onclick=togglePause; $("evalBtn").onclick=toggleEval;
   $("newBtn").onclick=newMatch; $("replayBtn").onclick=startReplay; $("exportBtn").onclick=exportRecord;
   $("modeBtn").onclick=toggleMode; $("langBtn").onclick=toggleLang;
+
+  // 「⋯」二次操作メニュー（スマホ用ドロップダウン）
+  const menuBtn=$("menuBtn"), topMenu=$("topMenu");
+  if(menuBtn && topMenu){
+    menuBtn.onclick=(e)=>{ e.stopPropagation(); const open=topMenu.classList.toggle("open"); menuBtn.setAttribute("aria-expanded", open?"true":"false"); };
+    topMenu.querySelectorAll(".btn").forEach(b=> b.addEventListener("click", closeTopMenu));
+    document.addEventListener("click",(e)=>{ if(topMenu.classList.contains("open") && !e.target.closest(".menuwrap")) closeTopMenu(); });
+  }
+
   $("speedRange").oninput=(e)=>setSpeed(parseFloat(e.target.value));
   $("shuffleBtn").onclick=()=>{ randomBoard(); randomPorts(); render(); toast(t("toast_shuffle")); };
   $("startBtn").onclick=startMatch;
