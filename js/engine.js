@@ -393,7 +393,7 @@ function robberMoved(hid){
   for(const vid of hexVertsG(hid)){ const oc=occupantOf(vid); if(oc && oc.p!==cur() && handTotal(oc.p)>0) cands.add(oc.p); }
   game.stealCands=[...cands];
   if(game.stealCands.length===0){ finishRobber(); }
-  else if(game.stealCands.length===1){ stealFrom(game.stealCands[0]); }
+  else if(game.stealCands.length===1){ stealFrom(bestStealTarget(game.stealCands)); }
   else { game.phase="steal"; render(); updateGamePanel(); }
 }
 function stealFrom(victim){
@@ -781,6 +781,13 @@ let MONO_OW_WEIGHT=1.4;   // 独占カードで鉄麦を優先する重み
 let COMPRESS_THRESH=5, COMPRESS_ITERS=10;
 let UNIFORM_TEMP=0;   // >0 にすると自己対戦の全席が同じ配置腕前になる（試合長の計測用）
 let W_CITY=1.0, W_SETTLE=1.0, W_ROAD=1.0, W_DEV=1.0;   // 行動の重み（1.0=現行のまま）
+// ユーザー調整: 開拓地が即開く道／道賞プランの時だけ道を建て、それ以外（余剰資源の消化・投機的な2手先）は温存
+let CONSERVE_ROADS=true;
+// ユーザー調整: 相手を「危険」とみなすVP閾値（9→8）。妨害・賞の奪い返しをVP8から発動
+let DANGER_VP=8;
+// ユーザー調整: 序盤は「初期配置の道＋1本(その1本で建て地が相当良くなる場合)」以外、道賞狙いでも道は-評価
+let EARLY_ROAD_BVP=5;        // 建物VP(開拓地1+都市2)がこの値未満なら「序盤」とみなす
+let EARLY_ROAD_QUALITY=0.6;  // 「相当良い建て地」= 開く頂点の配置スコアが盤面レンジの上位このぶん以上
 let CARD_ENGINE=false;   // 検証済み: 騎士賞は14%→19%に増えるが、人間型ボット相手だと逆に相手の勝率が上がる(20.1%→23.7%)。不採用。
 function _ce(p){ return (CARD_ENGINE instanceof Set) ? CARD_ENGINE.has(p) : !!CARD_ENGINE; }
 function _ka(p){ return (KNIGHT_AGGRO instanceof Set) ? KNIGHT_AGGRO.has(p) : !!KNIGHT_AGGRO; }
@@ -1110,7 +1117,7 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
       for(const q of game.order){
         if(q===p) continue;
         if(stole) break;
-        if(vpOf(q)<9) continue;   // 閾値をVP9(あと1点)に厳格化
+        if(vpOf(q)<DANGER_VP) continue;   // 危険とみなすVP閾値（ユーザー調整: 8）
         // 道賞を持っているなら、自分が追いつける（1本伸ばせば上回る）なら奪う
         if(game.lr.holder===q){
           const myLen=longestRoadOf(p);
@@ -1163,7 +1170,7 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
         // ただし BURST_ROAD_SMART: 「すぐ建設地が開く」道だけに限定する。
         // 自分で「温存推奨・都市化を遅らせる」とラベルした道まで建てるのは、
         // バースト回避が目的化した本末転倒（実測: この種が全バースト回避道の35.7%を占めていた）。
-        if(!BURST_ROAD_OFF && handTotal(p)>=5 && !si && placements[p].settlements.size<5){
+        if(!BURST_ROAD_OFF && !CONSERVE_ROADS && handTotal(p)>=5 && !si && placements[p].settlements.size<5){
           const ri=adv.find(x=>x.label.startsWith("道")&&x.target&&x.target.id!=null);
           const roadIsUseful = ri && ri.label.includes("すぐ建設地が開く");
           const allow = BURST_ROAD_SMART ? roadIsUseful : !!ri;
@@ -1387,7 +1394,7 @@ function aiStep(){
     gameClickHex(hid);
     render(); updateGamePanel(); setTimeout(aiStep, aiDelay(550)); return;
   }
-  if(game.phase==="steal"){ stealFrom(game.stealCands[0]); render(); updateGamePanel(); setTimeout(aiStep, aiDelay(450)); return; }
+  if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); render(); updateGamePanel(); setTimeout(aiStep, aiDelay(450)); return; }
   if(game.phase==="main"){
     _botMain(p); _cleanupTurn(p);
     if(game.phase==="main") endTurnGame();
@@ -1483,7 +1490,7 @@ function playSelfGame(temp, skipBoardGen, fixedInit){
     if(game.phase==="robber"){ const ra=robberAdvice();
       let hid = ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id;
       gameClickHex(hid); }
-    if(game.phase==="steal"){ stealFrom(game.stealCands[0]); }
+    if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); }
     if(game.phase==="main"){ _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); }
     if(game.phase==="over") break;
     if(++iters>3000) break;   // 安全弁
@@ -1552,7 +1559,7 @@ function watchAIGame(){
     }
     if(game.phase==="discard"){ while(game.discardQueue.length) _botDiscard(); }
     if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); }
-    if(game.phase==="steal"){ stealFrom(game.stealCands[0]); }
+    if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); }
     if(game.phase==="main"){ _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); }
     if(game.phase==="over") break;
     if(++iters>3000) break;
@@ -1745,28 +1752,38 @@ function numbersLegal(){
 }
 
 function randomBoard(){
-  // 資源の並びと数字の並びの両方を振り直しながら、公式の隣接ルールを満たす盤面を必ず作る。
-  // 数字だけ入れ替えても解が無い資源配置があるため、外側で資源からやり直すのが要点。
+  // 数字は「公式の螺旋配置(A〜R)」で置く。資源(砂漠の位置)だけを振り直して、
+  // 赤数字(6/8)などが隣接しない“バランス盤”になる砂漠位置を採用する。
+  // ＝ 数字は常に公式スパイラル、盤面ごとに資源と砂漠位置がランダムに変わる。
   const resPool=[]; for(const [k,n] of Object.entries(RES_COUNTS)) for(let i=0;i<n;i++) resPool.push(k);
-  for(let outer=0; outer<200; outer++){
+  let last=null;
+  for(let outer=0; outer<600; outer++){
     const res=shuffle(resPool.slice());
     board={};
     GEO.hexes.forEach((h,i)=>{ board[h.id]={resource:res[i], number:null}; });
-    const numbered=GEO.hexes.filter(h=>board[h.id].resource!=="desert").map(h=>h.id);
-    for(let attempt=0; attempt<200; attempt++){
-      const nums=shuffle(TOKENS.slice());
-      numbered.forEach((hid,i)=>{ board[hid].number=nums[i]; });
-      if(numbersLegal()) return;   // 合法盤面が完成
-    }
-    // この資源配置では200回試しても無理 → 資源から振り直す
+    assignOfficialNumbers();        // 公式の螺旋(A〜R)で数字を配置（砂漠は飛ばす）
+    last=board;
+    if(numbersLegal()) return;      // 6/8非隣接などを満たす砂漠位置を採用
   }
-  // ここに来ることは事実上ないが、来た場合でも最後の状態を返す（描画は壊れない）
+  if(last) board=last;              // 万一見つからなくても螺旋数字の盤面を返す（描画は壊れない）
+}
+// 数字の螺旋を無視して完全ランダムに数字だけ振る旧方式（必要時のフォールバック用に残す）
+function randomBoardShuffled(){
+  const resPool=[]; for(const [k,n] of Object.entries(RES_COUNTS)) for(let i=0;i<n;i++) resPool.push(k);
+  for(let outer=0; outer<200; outer++){
+    const res=shuffle(resPool.slice()); board={};
+    GEO.hexes.forEach((h,i)=>{ board[h.id]={resource:res[i], number:null}; });
+    const numbered=GEO.hexes.filter(h=>board[h.id].resource!=="desert").map(h=>h.id);
+    for(let attempt=0; attempt<200; attempt++){ const nums=shuffle(TOKENS.slice());
+      numbered.forEach((hid,i)=>{ board[hid].number=nums[i]; });
+      if(numbersLegal()) return; }
+  }
 }
 
 // 公式の螺旋順（島の角から中央へ反時計回り）。geometry座標から算出済みの固定順。
 const SPIRAL_ORDER=[7,3,0,1,2,6,11,15,18,17,16,12,8,4,5,10,14,13,9];
-// 標準の数値トークン列 A〜R（アルファベット順）
-const OFFICIAL_TOKENS=[5,2,6,3,8,10,9,12,11,4,8,10,9,4,5,6,3,11];
+// 標準の数値トークン列 A〜R（アルファベット順）: A5 B2 C6 D3 E8 F10 G9 H12 I11 J4 K8 L10 M9 N5 O4 P6 Q3 R11
+const OFFICIAL_TOKENS=[5,2,6,3,8,10,9,12,11,4,8,10,9,5,4,6,3,11];
 // 資源はそのままに、数字だけ公式の螺旋配置で置き直す（砂漠は飛ばす）
 function assignOfficialNumbers(){
   let i=0;
@@ -2201,7 +2218,7 @@ function playoutFrom(snap, vid, sp){
     }
     if(game.phase==="discard"){ while(game.discardQueue.length) _botDiscard(); }
     if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); }
-    if(game.phase==="steal"){ stealFrom(game.stealCands[0]); }
+    if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); }
     if(game.phase==="main"){ _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); }
     if(game.phase==="over") break;
     if(++iters>3000) break;
@@ -2623,6 +2640,18 @@ function computeAdvice(){
     }
     // 既に建設可能な空き頂点があるのに道を引くのは無駄（道賞プランを除く）→ 大幅減点
     if(reachNow.size>0 && !wantsRoad) roadScore -= 6;
+    // ユーザー調整: 「開拓地が即開く道」でも「道賞プラン」でもない道は、資源が余っていても建てず温存する
+    if(CONSERVE_ROADS && !br.opens && !wantsRoad) roadScore = -50;
+    // ユーザー調整2: 序盤は「初期配置の道＋1本(その1本で建て地が相当良くなる場合)」以外、道賞狙いでも道を伸ばすと-評価
+    if(CONSERVE_ROADS){
+      const _bvp = placements[p].settlements.size + 2*(placements[p].cities?placements[p].cities.size:0);
+      if(_bvp < EARLY_ROAD_BVP){
+        const _span = Math.max(0.001, B.mx - B.mn);
+        const _bigImprove = br.opens && ((br.score - B.mn)/_span >= EARLY_ROAD_QUALITY);   // その1本で相当良い建て地が開く
+        const _firstExtraRoad = placements[p].roads.size <= 2;                              // 初期配置の2本＋この1本まで
+        if(!(_bigImprove && _firstExtraRoad)) roadScore = -50;                              // 例外以外は序盤の道は-評価
+      }
+    }
     list.push({score:roadScore, can:((canPay(p,COST.road)||game.freeRoads>0)&&placements[p].roads.size<15), target:{type:"edge",id:br.eid},
       label: br.opens ? "道を伸ばす（すぐ建設地が開く）" : (wantsRoad?"道を伸ばす（道賞プラン）":"道を伸ばす（※温存推奨・都市化を遅らせる）"), cost:"木+レンガ"});
   }
@@ -2913,6 +2942,16 @@ function threatOf(q){
   const knights = (game.army && game.army[q]) ? game.army[q] : 0;
   t += knights * THREAT_W.knight;
   return t;
+}
+// 盗む相手が複数いる時は、脅威度(threatOf)の高い方を選ぶ。
+// 脅威度はVP・生産力・都市・購入カード・騎士から毎ターン動的に計算されるので、
+// 試合開始〜終盤で狙う相手が状況に応じて変わる（従来は常にstealCands[0]で固定だった）。
+function bestStealTarget(cands){
+  if(!cands || !cands.length) return null;
+  if(cands.length===1) return cands[0];
+  let best=cands[0], bt=-Infinity;
+  for(const q of cands){ let tv; try{ tv=threatOf(q); }catch(e){ tv=vpOf(q); } if(tv>bt){ bt=tv; best=q; } }
+  return best;
 }
 // あるタイルに、指定プレイヤーの「都市」が接しているか
 function _hexHasCityOf(hid, p){

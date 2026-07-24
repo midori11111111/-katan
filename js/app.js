@@ -291,7 +291,7 @@ function aiStep(){
   if(!isAI(p)){ aiBusy=false; refresh(); return; }
   if(game.phase==="roll"){ if(_shouldPlayKnight(p)) playDev("knight"); if(game.phase==="roll") doRoll(null); refresh(); scheduleAI(650); return; }
   if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); refresh(); scheduleAI(550); return; }
-  if(game.phase==="steal"){ stealFrom(game.stealCands[0]); refresh(); scheduleAI(450); return; }
+  if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); refresh(); scheduleAI(450); return; }
   if(game.phase==="main"){
     if(evalOn){
       // AIの手番でも評価値を見せる: まず現在のAIの評価を描画し、速度ぶん待ってから打つ
