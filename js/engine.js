@@ -1869,6 +1869,7 @@ let USE_THREAT=true;   // 盗賊の標的を「表面VP」ではなく「脅威�
 let THREAT_W={ vp:1.0, pip:0.10, city:0.5, dev:0.6, knight:0.8 };
    // true=勾配ブースティング(木ベース), false=線形回帰
 let useModel=true;   // false=手書き戦略, true=学習モデル（学習単体AIと同じブレンド式）
+let MODEL_BLEND=0.75;   // 頂点評価の合成比: 0=手書きBEST_Wのみ / 1=学習モデルのみ（既定0.75。サイトの調整バーで可変）
 // 1頂点を「1軒の配置」とみなしてモデル特徴を作り、勝率スコアを返す（頂点評価用の近似）
 function vertexModelScore(vid, p){
   const hids=GEO.vertex_hexes[String(vid)]||[];
@@ -1999,7 +2000,7 @@ function computeBest(resFactorOverride){
     const pt=portAt[vtx.id];
     if(pt){ sc+=BEST_W.portBase; if(pt!=="3:1" && resPip[pt]) sc+=BEST_W.portMatch*resPip[pt]; }
     if(useModel && !(typeof FAST_PLAYOUT!=="undefined" && FAST_PLAYOUT)){ const _activeP = (typeof sim!=="undefined" && sim) ? sim.order[sim.step] : ((typeof active!=="undefined" && active) ? active : ((typeof game!=="undefined" && game && game.order) ? cur() : 1));
-      sc = sc*0.25 + vertexModelScore(vtx.id, _activeP)*100*0.75; }   // 統一AI: 静的25%+モデル75%（配合トーナメント9000試合で検証済みの最適域）
+      sc = sc*(1-MODEL_BLEND) + vertexModelScore(vtx.id, _activeP)*100*MODEL_BLEND; }   // 合成比 MODEL_BLEND（既定0.75=静的25%+モデル75%。調整バーで可変）
     // 2軒目の多様性補正（ユーザー指摘）: 1軒目で持っていない「新規資源」をモデルブレンドの後に加点する。
     // 1軒目羊麦木→2軒目も羊麦木なら新規ゼロで加点なし。鉄など未所持資源を持つ頂点は正しく浮上する。
     if(typeof DIVERSITY_NET!=="undefined" && DIVERSITY_NET && _ownedRes && _ownedRes.size>0){

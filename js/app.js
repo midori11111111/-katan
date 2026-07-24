@@ -18,7 +18,7 @@ const I18N = {
   ja:{
     brand_title:"カタン 挑戦者AI 対局", brand_sub:"あなた 対 AI3人",
     speed_label:"AI速度", eval_word:"AI評価値",
-    replay_btn:"棋譜確認", export_btn:"棋譜書き出し", new_btn:"新規対局",
+    replay_btn:"棋譜確認", export_btn:"棋譜書き出し", new_btn:"新規対局", tune_btn:"⚙ AI調整",
     pause_title:"一時停止", play_title:"再生",
     mode_pc:"PC表示", mode_mobile:"スマホ表示",
     setup_title:"対局の設定",
@@ -85,7 +85,7 @@ const I18N = {
   en:{
     brand_title:"Catan Challenger AI", brand_sub:"You vs 3 AIs",
     speed_label:"AI speed", eval_word:"AI eval",
-    replay_btn:"Replay", export_btn:"Export record", new_btn:"New game",
+    replay_btn:"Replay", export_btn:"Export record", new_btn:"New game", tune_btn:"⚙ AI Tuning",
     pause_title:"Pause", play_title:"Play",
     mode_pc:"PC view", mode_mobile:"Mobile view",
     setup_title:"Game setup",
@@ -714,6 +714,99 @@ function startMatch(){
 }
 
 /* ============================================================
+   AIチューニング（スライダーで評価軸を生調整）
+   ============================================================ */
+let _tuneOpen=false, _tuneRows=[];
+const TUNE_GROUPS = [
+  { title:["配置：資源の重み","Placement: resource weights"],
+    hint:["頂点の手書き評価。現行AI・最善手表示に反映（挑戦者の初期2軒は学習モデルなので不変）。効きは下の『学習モデル比』にも依存。",
+          "Hand-written vertex value (affects current-AI & the best-spot display; the challenger's opening uses the learned model). Effect also scales with 'Model blend' below."],
+    rows:[
+      {ja:"鉄 Ore",en:"Ore",min:0,max:3,step:0.05,def:1.9,get:()=>BEST_W.resFactor.ore,set:v=>BEST_W.resFactor.ore=v},
+      {ja:"麦 Wheat",en:"Wheat",min:0,max:3,step:0.05,def:1.7,get:()=>BEST_W.resFactor.wheat,set:v=>BEST_W.resFactor.wheat=v},
+      {ja:"木 Wood",en:"Wood",min:0,max:3,step:0.05,def:1.0,get:()=>BEST_W.resFactor.wood,set:v=>BEST_W.resFactor.wood=v},
+      {ja:"土 Brick",en:"Brick",min:0,max:3,step:0.05,def:1.0,get:()=>BEST_W.resFactor.brick,set:v=>BEST_W.resFactor.brick=v},
+      {ja:"羊 Sheep",en:"Sheep",min:0,max:3,step:0.05,def:0.85,get:()=>BEST_W.resFactor.sheep,set:v=>BEST_W.resFactor.sheep=v},
+    ]},
+  { title:["配置：その他","Placement: other"],
+    rows:[
+      {ja:"多様性",en:"Diversity",min:0,max:3,step:0.05,def:0.8,get:()=>BEST_W.diversity,set:v=>BEST_W.diversity=v},
+      {ja:"港（基礎）",en:"Port (base)",min:0,max:3,step:0.05,def:1.0,get:()=>BEST_W.portBase,set:v=>BEST_W.portBase=v},
+      {ja:"港（資源一致）",en:"Port (match)",min:0,max:3,step:0.05,def:0.9,get:()=>BEST_W.portMatch,set:v=>BEST_W.portMatch=v},
+      {ja:"同数字重ね",en:"Same-number",min:0,max:3,step:0.05,def:0.9,get:()=>BEST_W.sameNumber,set:v=>BEST_W.sameNumber=v},
+      {ja:"学習モデル比 (0=手書き / 1=モデル)",en:"Model blend (0=hand / 1=model)",min:0,max:1,step:0.05,def:0.75,get:()=>MODEL_BLEND,set:v=>MODEL_BLEND=v},
+    ]},
+  { title:["本編：行動の重み","Main game: action weights"],
+    rows:[
+      {ja:"都市化",en:"City",min:0,max:2.5,step:0.05,def:1.0,get:()=>W_CITY,set:v=>W_CITY=v},
+      {ja:"開拓地",en:"Settlement",min:0,max:2.5,step:0.05,def:1.0,get:()=>W_SETTLE,set:v=>W_SETTLE=v},
+      {ja:"道",en:"Road",min:0,max:3,step:0.05,def:1.0,get:()=>W_ROAD,set:v=>W_ROAD=v},
+    ]},
+  { title:["盗賊：脅威度の重み","Robber: threat weights"],
+    hint:["盗賊で誰を狙うか（大きいほど重視）。","Who the robber targets (higher = more weight)."],
+    rows:[
+      {ja:"VP",en:"VP",min:0,max:3,step:0.05,def:1.0,get:()=>THREAT_W.vp,set:v=>THREAT_W.vp=v},
+      {ja:"生産力",en:"Production",min:0,max:1,step:0.02,def:0.10,get:()=>THREAT_W.pip,set:v=>THREAT_W.pip=v},
+      {ja:"都市数",en:"Cities",min:0,max:3,step:0.05,def:0.5,get:()=>THREAT_W.city,set:v=>THREAT_W.city=v},
+      {ja:"購入カード",en:"Dev bought",min:0,max:3,step:0.05,def:0.6,get:()=>THREAT_W.dev,set:v=>THREAT_W.dev=v},
+      {ja:"騎士",en:"Knights",min:0,max:3,step:0.05,def:0.8,get:()=>THREAT_W.knight,set:v=>THREAT_W.knight=v},
+    ]},
+  { title:["道・妨害","Roads & disruption"],
+    rows:[
+      {ja:"妨害する相手のVP",en:"Disrupt at rival VP",min:6,max:10,step:1,def:8,get:()=>DANGER_VP,set:v=>DANGER_VP=v},
+    ],
+    toggles:[
+      {ja:"無駄道を温存する",en:"Conserve roads",def:true,get:()=>CONSERVE_ROADS,set:v=>CONSERVE_ROADS=v},
+    ]},
+];
+function _tuneFmt(v){ return (Math.round(v*100)/100).toString(); }
+function _tuneApplied(){ if(typeof refresh==="function" && game) refresh(); }
+function buildTunePanel(){
+  const p=$("tunePanel"); if(!p) return;
+  _tuneRows=[];
+  const L=a=>LANG==="en"?a[1]:a[0];
+  let h=`<div class="tune-head"><b>${LANG==="en"?"AI Tuning":"AI調整"}</b><button class="btn sm ghost" id="tuneClose" title="close">✕</button></div>`;
+  h+=`<div class="tune-scroll"><div class="tune-note">${LANG==="en"?"Sliders change the AI live — the evaluation values and the AI's next moves update immediately.":"スライダーは即座にAIへ反映されます（評価値も次の一手も即変化）。"}</div>`;
+  TUNE_GROUPS.forEach((g,gi)=>{
+    h+=`<div class="tune-grp"><div class="tune-gt">${L(g.title)}</div>`;
+    if(g.hint) h+=`<div class="tune-hint">${L(g.hint)}</div>`;
+    (g.rows||[]).forEach((r,ri)=>{ const id=`tr_${gi}_${ri}`, v=r.get();
+      h+=`<div class="tune-row"><label for="${id}">${LANG==="en"?r.en:r.ja}</label><input type="range" id="${id}" min="${r.min}" max="${r.max}" step="${r.step}" value="${v}"><span class="tune-val" id="${id}v">${_tuneFmt(v)}</span></div>`; });
+    (g.toggles||[]).forEach((r,ti)=>{ const id=`tt_${gi}_${ti}`;
+      h+=`<div class="tune-row tog"><label for="${id}">${LANG==="en"?r.en:r.ja}</label><input type="checkbox" id="${id}" ${r.get()?"checked":""}></div>`; });
+    h+=`</div>`;
+  });
+  h+=`</div><div class="tune-foot"><button class="btn sm" id="tuneReset">${LANG==="en"?"Reset":"リセット"}</button><button class="btn sm" id="tuneCopy">${LANG==="en"?"Copy settings":"設定をコピー"}</button></div>`;
+  p.innerHTML=h;
+  TUNE_GROUPS.forEach((g,gi)=>{
+    (g.rows||[]).forEach((r,ri)=>{ const id=`tr_${gi}_${ri}`, el=$(id), vv=$(id+"v");
+      el.oninput=()=>{ const v=parseFloat(el.value); r.set(v); vv.textContent=_tuneFmt(v); _tuneApplied(); };
+      _tuneRows.push({el,vv,r,type:"range"}); });
+    (g.toggles||[]).forEach((r,ti)=>{ const id=`tt_${gi}_${ti}`, el=$(id);
+      el.onchange=()=>{ r.set(el.checked); _tuneApplied(); };
+      _tuneRows.push({el,r,type:"tog"}); });
+  });
+  $("tuneClose").onclick=closeTune; $("tuneReset").onclick=resetTune; $("tuneCopy").onclick=copyTuneSettings;
+}
+function refreshTuneValues(){ _tuneRows.forEach(t=>{ if(t.type==="range"){ const v=t.r.get(); t.el.value=v; t.vv.textContent=_tuneFmt(v); } else { t.el.checked=!!t.r.get(); } }); }
+function resetTune(){ TUNE_GROUPS.forEach(g=>{ (g.rows||[]).forEach(r=>r.set(r.def)); (g.toggles||[]).forEach(r=>r.set(r.def)); }); refreshTuneValues(); _tuneApplied(); toast(LANG==="en"?"Reset to defaults":"既定値に戻しました"); }
+function copyTuneSettings(){
+  const s=`// AI tuning — paste into engine.js (site) / zoo.js (benchmark)
+BEST_W.resFactor={ore:${BEST_W.resFactor.ore}, wheat:${BEST_W.resFactor.wheat}, wood:${BEST_W.resFactor.wood}, brick:${BEST_W.resFactor.brick}, sheep:${BEST_W.resFactor.sheep}};
+BEST_W.diversity=${BEST_W.diversity}; BEST_W.portBase=${BEST_W.portBase}; BEST_W.portMatch=${BEST_W.portMatch}; BEST_W.sameNumber=${BEST_W.sameNumber};
+MODEL_BLEND=${MODEL_BLEND};
+W_CITY=${W_CITY}; W_SETTLE=${W_SETTLE}; W_ROAD=${W_ROAD};
+THREAT_W={vp:${THREAT_W.vp}, pip:${THREAT_W.pip}, city:${THREAT_W.city}, dev:${THREAT_W.dev}, knight:${THREAT_W.knight}};
+DANGER_VP=${DANGER_VP}; CONSERVE_ROADS=${CONSERVE_ROADS};`;
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(s).then(()=>toast(LANG==="en"?"Copied to clipboard":"クリップボードにコピーしました"), ()=>_tuneShowText(s)); }
+  else _tuneShowText(s);
+}
+function _tuneShowText(s){ let b=$("tuneCopyBox"); if(!b){ b=document.createElement("textarea"); b.id="tuneCopyBox"; b.className="tune-copybox"; b.readOnly=true; const sc=$("tunePanel").querySelector(".tune-scroll")||$("tunePanel"); sc.appendChild(b); } b.value=s; b.style.display="block"; b.focus(); b.select(); toast(LANG==="en"?"Select & copy the text":"テキストを選択してコピー"); }
+function openTune(){ buildTunePanel(); $("tunePanel").classList.add("open"); $("tuneBackdrop").classList.add("show"); $("tunePanel").setAttribute("aria-hidden","false"); _tuneOpen=true; }
+function closeTune(){ $("tunePanel").classList.remove("open"); $("tuneBackdrop").classList.remove("show"); $("tunePanel").setAttribute("aria-hidden","true"); _tuneOpen=false; }
+function toggleTune(){ _tuneOpen?closeTune():openTune(); }
+
+/* ============================================================
    配線
    ============================================================ */
 function afterHuman(){ aiMaybeGo(); }
@@ -731,6 +824,9 @@ function wireControls(){
   $("pauseBtn").onclick=togglePause; $("evalBtn").onclick=toggleEval;
   $("newBtn").onclick=newMatch; $("replayBtn").onclick=startReplay; $("exportBtn").onclick=exportRecord;
   $("modeBtn").onclick=toggleMode; $("langBtn").onclick=toggleLang;
+  { const _tb=$("tuneBtn"); if(_tb) _tb.onclick=toggleTune;
+    const _bd=$("tuneBackdrop"); if(_bd) _bd.onclick=closeTune;
+    document.addEventListener("keydown",(e)=>{ if(e.key==="Escape" && _tuneOpen) closeTune(); }); }
 
   // 「⋯」二次操作メニュー（スマホ用ドロップダウン）
   const menuBtn=$("menuBtn"), topMenu=$("topMenu");
