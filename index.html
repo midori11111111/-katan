@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>カタン 挑戦者AI 対局</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<!-- ===== 上部バー ===== -->
+<div class="topbar">
+  <div class="brand">
+    <h1>カタン <span class="tag">挑戦者AI</span> 対局</h1>
+    <span class="sub">あなた 対 AI3人</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="ctrl">
+    <div class="grp">
+      <button id="pauseBtn" class="btn icbtn" title="一時停止 / 再生">⏸</button>
+      <label>AI速度</label>
+      <input id="speedRange" type="range" min="0" max="3" step="0.5" value="1" style="width:120px">
+      <span id="speedLabel" style="width:44px; text-align:right; color:var(--muted); font-size:12px">1.0秒</span>
+    </div>
+    <button id="evalBtn" class="btn">AI評価値: OFF</button>
+    <button id="replayBtn" class="btn" disabled>棋譜確認</button>
+    <button id="exportBtn" class="btn" disabled>棋譜書き出し</button>
+    <button id="newBtn" class="btn ghost">新規対局</button>
+  </div>
+</div>
+
+<!-- ===== 本体 ===== -->
+<div class="layout">
+  <!-- 左: 盤面 + 手札 + 操作 + 評価値 -->
+  <div class="left">
+    <div class="boardwrap">
+      <svg id="board" viewBox="0 0 560 560" xmlns="http://www.w3.org/2000/svg"></svg>
+
+      <!-- 開始画面(オーバーレイ) -->
+      <div id="startScreen">
+        <div class="startcard">
+          <h2>対局の設定</h2>
+          <div class="lead">あなたの席と、相手AI3人のタイプを選んで対局を始めます。<br>
+            <b>挑戦者AI</b>=高速先読みで初期配置を選ぶ最強型／<b>現行AI</b>=学習モデルの標準型。</div>
+          <div style="margin-bottom:10px; color:var(--muted); font-size:13px">あなたの席</div>
+          <div class="seatpick" id="seatPick" style="margin-bottom:16px"></div>
+          <div class="seatgrid" id="seatGrid"></div>
+          <div class="startrow">
+            <button id="shuffleBtn" class="btn">盤面シャッフル</button>
+            <div class="spacer"></div>
+            <button id="startBtn" class="btn primary">対局開始</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- リプレイ操作バー -->
+      <div id="replayBar">
+        <div class="rvtop">
+          <b id="rvTitle">リプレイ</b>
+          <span id="rvCount">0 / 0</span>
+          <div class="spacer" style="flex:1"></div>
+          <button id="rvPrev" class="btn sm">◀ 前</button>
+          <button id="rvPlay" class="btn sm">▶ 自動</button>
+          <button id="rvNext" class="btn sm">次 ▶</button>
+          <button id="rvExit" class="btn sm ghost">閉じる</button>
+        </div>
+        <div id="rvHands"></div>
+        <div id="rvEvents"></div>
+      </div>
+    </div>
+
+    <!-- 自分の手札 -->
+    <div class="handbar">
+      <h3>あなたの手札</h3>
+      <div class="cards" id="myCards"></div>
+      <div class="devcards" id="myDev"></div>
+    </div>
+
+    <!-- 操作 -->
+    <div class="handbar">
+      <h3>操作</h3>
+      <div class="actions" id="actions">
+        <button id="rollBtnU" class="btn primary" disabled>🎲 サイコロを振る</button>
+        <button id="buyDevU" class="btn" disabled>発展カードを買う</button>
+        <button id="knightU" class="btn" disabled>騎士</button>
+        <button id="roadsU" class="btn" disabled>街道建設</button>
+        <button id="plentyU" class="btn" disabled>収穫</button>
+        <button id="monoU" class="btn" disabled>独占</button>
+        <div class="trade">
+          <select id="tradeGive"></select><span style="color:var(--muted)">→</span><select id="tradeGet"></select>
+          <button id="tradeBtnU" class="btn sm" disabled>交易</button>
+        </div>
+        <button id="endTurnU" class="btn good" disabled>ターン終了</button>
+      </div>
+      <div class="prompt" id="prompt" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- 右: 情報パネル -->
+  <div class="right">
+    <div class="statusbar" id="statusBar">対局を開始してください。</div>
+
+    <!-- AI評価値（目玉機能） -->
+    <div id="evalPanel">
+      <h3>AI評価値</h3>
+      <div class="plan" id="evalPlan"></div>
+      <div id="evalList"></div>
+    </div>
+
+    <div class="panel">
+      <h2>ログ <span class="mini" id="logMini"></span></h2>
+      <div id="gameLog"></div>
+    </div>
+
+    <div class="panel">
+      <h2>銀行 <span class="mini">残りカード</span></h2>
+      <div class="bankgrid" id="bankGrid"></div>
+      <div class="bankmeta" id="bankMeta"></div>
+      <div class="devplayed" id="devPlayed"></div>
+    </div>
+
+    <div class="panel">
+      <h2>相手プレイヤー <span class="mini">手札は枚数のみ公開</span></h2>
+      <div id="oppPanel"></div>
+    </div>
+
+    <div class="panel">
+      <h2>あなた</h2>
+      <div id="mePanel"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== エンジンが参照する非表示スタブ(エディタ由来のDOM id) ===== -->
+<div style="display:none" aria-hidden="true">
+  <span id="bestToggle"></span>
+  <span id="bestHint"></span>
+  <input id="gamePlayers" value="4">
+  <div id="gameStart"></div>
+  <div id="gameBox"></div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="js/engine.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
