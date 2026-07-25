@@ -201,9 +201,9 @@ function jaToEn(s){
 /* ============================================================
    UI 状態
    ============================================================ */
-let humanSeat = 1;
+let seatKind = {1:"human",2:"challenger",3:"challenger",4:"challenger"};  // 各席の担当: "human" / "challenger" / "puremodel"
+let humanSeat = 1;   // 先頭の人間席（開始時に導出。単一参照が要る箇所の既定フォーカス用）
 let seatAI = {1:"human",2:"challenger",3:"challenger",4:"challenger"};
-let oppChoice = {1:"challenger",2:"challenger",3:"challenger",4:"challenger"};
 let paused = false;
 let evalOn = false;
 let aiSpeedSec = 1.0;
@@ -324,6 +324,15 @@ function aiMaybeGo(){
 function refresh(){ if(game){ render(); updateGamePanel(); } }
 function seatTag(p){ return `<b style="color:${PCOLORS[p-1]}">P${p}</b>`; }
 
+// ホットシート対応: 人間席かどうか / いま画面に映すべき席（フォーカス）
+function isHuman(p){ return !!(game && game.ai && p!=null && !game.ai.has(p)); }
+function uiSeat(){
+  if(!game) return humanSeat;
+  if(game.phase==="discard" && game.discardQueue && game.discardQueue[0]) return game.discardQueue[0].p;  // 捨てる本人
+  if(game.phase==="setup" && game.setup) return game.setup.queue[game.setup.step];                        // 配置中の席
+  return cur();
+}
+
 function updateGamePanel(){
   if(!game) return;
   const p=cur();
@@ -360,28 +369,36 @@ function updateStatus(activeSeat){
 function resButtons(){ return " " + RES5.map(r=>`<button class="btn sm" data-res="${r}" style="border-color:${RES_COL[r]}">${resName(r)}</button>`).join(" "); }
 function updatePrompt(activeSeat){
   const pr=$("prompt"); let html="", hot=false;
-  if(game.ask && cur()===humanSeat){
+  if(game.ask && isHuman(cur())){
     hot=true;
     html = (game.ask.type==="plenty") ? t("pr_plenty",{n:game.ask.picks})+resButtons() : t("pr_mono")+resButtons();
-  } else if(game.phase==="steal" && cur()===humanSeat){
+  } else if(game.phase==="steal" && isHuman(cur())){
     hot=true;
     html = t("pr_steal") + game.stealCands.map(c=>`<button class="btn sm" data-steal="${c}">${t("pr_steal_btn",{p:c,n:handTotal(c)})}</button>`).join(" ");
-  } else if(game.phase==="discard" && game.discardQueue[0] && game.discardQueue[0].p===humanSeat){
+  } else if(game.phase==="discard" && game.discardQueue[0] && isHuman(game.discardQueue[0].p)){
     hot=true; html=t("pr_discard",{n:game.discardQueue[0].need});
-  } else if(game.phase==="robber" && cur()===humanSeat){ html=t("pr_robber"); }
-  else if(game.phase==="setup" && activeSeat===humanSeat){ html = game.setup.phase==="settle"?t("pr_setup_settle"):t("pr_setup_road"); }
-  else if(game.phase==="main" && cur()===humanSeat){ html=t("pr_main"); }
+  } else if(game.phase==="robber" && isHuman(cur())){ html=t("pr_robber"); }
+  else if(game.phase==="setup" && isHuman(activeSeat)){ html = game.setup.phase==="settle"?t("pr_setup_settle"):t("pr_setup_road"); }
+  else if(game.phase==="main" && isHuman(cur())){ html=t("pr_main"); }
   if(html){ pr.style.display=""; pr.className="prompt"+(hot?" hot":""); pr.innerHTML=html; }
   else { pr.style.display="none"; pr.innerHTML=""; return; }
   pr.querySelectorAll("[data-steal]").forEach(b=>{ b.onclick=()=>{ stealFrom(Number(b.dataset.steal)); refresh(); aiMaybeGo(); }; });
-  if(game.ask && cur()===humanSeat){
+  if(game.ask && isHuman(cur())){
     const fn = game.ask.type==="plenty" ? resolvePlenty : resolveMono;
     pr.querySelectorAll("[data-res]").forEach(b=>{ b.onclick=()=>{ fn(b.dataset.res); refresh(); aiMaybeGo(); }; });
   }
 }
 
 function renderHand(){
-  const me=humanSeat, box=$("myCards"); box.innerHTML="";
+  const me=uiSeat(), box=$("myCards");
+  const htEl=document.querySelector(".handhead .ht");
+  if(!isHuman(me)){   // AIの番: 手札は非公開
+    if(htEl) htEl.textContent = (LANG==="en"?`P${me} (AI)`:`P${me}（AI）の番`);
+    box.innerHTML = `<div class="handai">${LANG==="en"?`🤖 P${me} (AI) is playing — hand hidden`:`🤖 P${me}（AI）の番 — 手札は非公開`}</div>`;
+    return;
+  }
+  if(htEl) htEl.textContent = (LANG==="en"?`P${me} — your hand`:`P${me} の手札`);
+  box.innerHTML="";
   const discarding = game.phase==="discard" && game.discardQueue[0] && game.discardQueue[0].p===me;
   for(const r of RES5){
     const c=document.createElement("div");
@@ -393,13 +410,14 @@ function renderHand(){
 }
 function humanDiscard(r){
   const d=game.discardQueue[0];
-  if(!d || d.p!==humanSeat || game.hands[humanSeat][r]<=0) return;
-  game.hands[humanSeat][r]--; d.need--;
+  if(!d || !isHuman(d.p) || game.hands[d.p][r]<=0) return;
+  game.hands[d.p][r]--; d.need--;
   if(d.need<=0){ game.discardQueue.shift(); if(!game.discardQueue.length){ game.phase="robber"; toast(t("toast_robber")); } }
   refresh(); aiMaybeGo();
 }
 function renderMyDev(){
-  const me=humanSeat, box=$("myDev"); box.innerHTML="";
+  const me=uiSeat(), box=$("myDev"); box.innerHTML="";
+  if(!isHuman(me)){ box.innerHTML=`<span class="devchip">${t("dev_deck_chip",{n:game.dev.deck.length})}</span>`; return; }  // AIの発展カードは非公開
   const h=game.dev.hands[me]; const chips=[];
   const devKey={knight:"dev_knight",roads:"dev_roads",plenty:"dev_plenty",mono:"dev_mono",vp:"dev_vp"};
   for(const c of ["knight","roads","plenty","mono","vp"]) if(h[c]>0) chips.push(`<span class="devchip">${t(devKey[c])} <b>×${h[c]}</b></span>`);
@@ -407,7 +425,13 @@ function renderMyDev(){
   box.innerHTML=chips.join("");
 }
 function renderMeStat(){
-  const me=humanSeat, over=game.phase==="over";
+  const me=uiSeat(), over=game.phase==="over";
+  if(!isHuman(me)){   // AIの番: 公開情報のみ（VPは隠しカードを含むため出さない）
+    $("meStat").innerHTML = `<span class="dot" style="background:${PCOLORS[me-1]}"></span>P${me} <span class="ai">${seatAiName(me)}</span>`
+      + `<span class="sep">${t("lbl_knights")} <b>${game.army[me]}</b></span>`
+      + `<span class="sep">${t("lbl_road")} <b>${longestRoadOf(me)}</b></span>`;
+    return;
+  }
   const devN=Object.values(game.dev.hands[me]).reduce((a,b)=>a+b,0);
   const vpCard=game.dev.hands[me].vp>0 ? ` <span class="badge">${t("vpcards",{n:game.dev.hands[me].vp})}</span>` : "";
   $("meStat").innerHTML =
@@ -418,7 +442,7 @@ function renderMeStat(){
     + `<span class="sep">${t("lbl_road")} <b>${longestRoadOf(me)}</b></span>${vpCard}`;
 }
 function updateActions(){
-  const me=humanSeat, isMe=(cur()===me), main=isMe&&game.phase==="main";
+  const isMe=isHuman(cur()), main=isMe&&game.phase==="main";
   $("rollBtnU").disabled  = !(isMe && game.phase==="roll");
   $("buyDevU").disabled   = !(main && game.dev.deck.length>0);
   $("knightU").disabled   = !(isMe && (game.phase==="main"||game.phase==="roll") && safeCanPlay("knight"));
@@ -428,7 +452,7 @@ function updateActions(){
   $("tradeBtnU").disabled = !main;
   $("endTurnU").disabled  = !main;
 }
-function safeCanPlay(card){ try{ return cur()===humanSeat && canPlay(card); }catch(e){ return false; } }
+function safeCanPlay(card){ try{ return isHuman(cur()) && canPlay(card); }catch(e){ return false; } }
 
 function renderBank(){
   const g=$("bankGrid"); g.innerHTML="";
@@ -444,7 +468,7 @@ function renderOpponents(activeSeat){
   const box=$("oppPanel"); box.innerHTML="";
   const over=game.phase==="over";
   for(let q=1;q<=numPlayers;q++){
-    if(q===humanSeat) continue;
+    if(q===uiSeat()) continue;   // いま手札を表示している席は除く（残り全員をカウントのみで表示＝人間同士も伏せる）
     const devN=Object.values(game.dev.hands[q]).reduce((a,b)=>a+b,0);
     const turn=(q===activeSeat)&&!over;
     const vpCard = over && game.dev.hands[q].vp>0 ? ` <span class="badge sm">${t("vpcards",{n:game.dev.hands[q].vp})}</span>` : "";
@@ -475,9 +499,9 @@ function evLabel(label){
 }
 function updateEval(){
   const anyMain = game.phase==="main";                         // 誰の手番でも本編なら評価を出す（AI含む）
-  const humanPlace = game.phase==="setup" && game.setup && game.setup.phase==="settle" && game.setup.queue[game.setup.step]===humanSeat;
+  const humanPlace = game.phase==="setup" && game.setup && game.setup.phase==="settle" && isHuman(game.setup.queue[game.setup.step]);
   const curSeat = cur();
-  const seatLbl = (anyMain && curSeat!==humanSeat) ? t("eval_seat",{seat:curSeat}) : "";
+  const seatLbl = (anyMain && !isHuman(curSeat)) ? t("eval_seat",{seat:curSeat}) : "";
 
   const wantBest = evalOn && humanPlace;
   if(wantBest!==showBest){ showBest=wantBest; if(!_rerendering){ _rerendering=true; render(); _rerendering=false; } }
@@ -672,44 +696,36 @@ function buildStartScreen(){
   modeRow.appendChild(segBtn(LANG==="en"?"Mobile":"スマホ", uiMode==="mobile", ()=>{ uiMode="mobile"; applyMode(); buildStartScreen(); }));
   top.appendChild(langRow); top.appendChild(modeRow);
 
-  // あなたの席
-  const sp=$("seatPick"); sp.innerHTML="";
-  for(let s=1;s<=4;s++){
-    const b=document.createElement("button");
-    b.textContent="P"+s; b.className=(s===humanSeat)?"on":"";
-    b.style.color=(s===humanSeat)?PCOLORS[s-1]:""; b.style.borderColor=(s===humanSeat)?PCOLORS[s-1]:"";
-    b.onclick=()=>{ humanSeat=s; buildStartScreen(); };
-    sp.appendChild(b);
-  }
-  // 席ごとのAI
+  // 各席の担当（人間 / 挑戦者AI / 現行AI）— 同じ端末で人間を複数席に置ける（ホットシート）
+  const subEl=document.querySelector(".sublabel[data-i18n='your_seat']");
+  if(subEl) subEl.textContent = (LANG==="en"?"Who plays each seat (hot-seat OK)":"各席の担当（人間を複数席OK）");
+  $("seatPick").innerHTML="";
+  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["challenger",t("challenger_full")],["puremodel",t("standard_full")]];
   const grid=$("seatGrid"); grid.innerHTML="";
   for(let s=1;s<=4;s++){
-    const row=document.createElement("div"); row.className="seatrow"+(s===humanSeat?" me":"");
-    if(s===humanSeat){
-      row.innerHTML=`<div class="who"><span class="dot" style="background:${PCOLORS[s-1]}"></span>P${s}</div><div class="youtag">${t("you_operate")}</div>`;
-    }else{
-      row.innerHTML=`<div class="who"><span class="dot" style="background:${PCOLORS[s-1]}"></span>P${s}</div>
-        <div><select data-seat="${s}">
-          <option value="challenger"${oppChoice[s]==="challenger"?" selected":""}>${t("challenger_full")}</option>
-          <option value="puremodel"${oppChoice[s]==="puremodel"?" selected":""}>${t("standard_full")}</option>
-        </select></div>`;
-    }
+    const row=document.createElement("div"); row.className="seatrow";
+    const seg=kinds.map(([k,lbl])=>`<button class="segb${seatKind[s]===k?" on":""}" data-seat="${s}" data-kind="${k}">${lbl}</button>`).join("");
+    row.innerHTML=`<div class="who"><span class="dot" style="background:${PCOLORS[s-1]}"></span>P${s}</div><div class="seatseg">${seg}</div>`;
     grid.appendChild(row);
   }
-  grid.querySelectorAll("select[data-seat]").forEach(sel=>{ sel.onchange=()=>{ oppChoice[Number(sel.dataset.seat)]=sel.value; }; });
+  grid.querySelectorAll(".segb[data-seat]").forEach(b=>{ b.onclick=()=>{ seatKind[Number(b.dataset.seat)]=b.dataset.kind; buildStartScreen(); }; });
 }
 
 function startMatch(){
-  seatAI={}; for(let s=1;s<=4;s++) seatAI[s]=(s===humanSeat)?"human":oppChoice[s];
+  seatAI={}; for(let s=1;s<=4;s++) seatAI[s]=seatKind[s];
+  const humans=[1,2,3,4].filter(s=>seatKind[s]==="human");
+  humanSeat = humans.length ? humans[0] : 1;
   $("gamePlayers").value="4"; showBest=false; _overHandled=false;
   startGame(null);
-  game.ai=new Set([1,2,3,4].filter(p=>p!==humanSeat));
+  game.ai=new Set([1,2,3,4].filter(p=>seatKind[p]!=="human"));
   paused=false; updatePauseBtn();
   $("startScreen").classList.add("hidden");
   $("exportBtn").disabled=false; $("replayBtn").disabled=true;
   if(replay) replay.active=false; $("replayBar").style.display="none";
   if(uiMode==="mobile") setMobileTab("status");
-  toast(t("toast_start",{p:humanSeat}));
+  toast(humans.length
+    ? (LANG==="en"?`Game start — humans: ${humans.map(x=>"P"+x).join(", ")}`:`対局開始 — 人間: ${humans.map(x=>"P"+x).join("・")}`)
+    : (LANG==="en"?"Game start (all AI — watch)":"対局開始（全席AI・観戦）"));
   refresh(); aiMaybeGo();
 }
 
@@ -817,14 +833,14 @@ function toggleTune(){ _tuneOpen?closeTune():openTune(); }
    配線
    ============================================================ */
 function afterHuman(){ aiMaybeGo(); }
-function guardTurn(){ return game && cur()===humanSeat; }
+function guardTurn(){ return game && isHuman(cur()); }
 function wireControls(){
   $("rollBtnU").onclick  = ()=>{ if(guardTurn()){ doRoll(null); afterHuman(); } };
   $("buyDevU").onclick   = ()=>{ if(guardTurn()){ buyDev(); afterHuman(); } };
-  $("knightU").onclick   = ()=>{ if(cur()===humanSeat){ playDev("knight"); afterHuman(); } };
-  $("roadsU").onclick    = ()=>{ if(cur()===humanSeat){ playDev("roads"); afterHuman(); } };
-  $("plentyU").onclick   = ()=>{ if(cur()===humanSeat){ playDev("plenty"); afterHuman(); } };
-  $("monoU").onclick     = ()=>{ if(cur()===humanSeat){ playDev("mono"); afterHuman(); } };
+  $("knightU").onclick   = ()=>{ if(isHuman(cur())){ playDev("knight"); afterHuman(); } };
+  $("roadsU").onclick    = ()=>{ if(isHuman(cur())){ playDev("roads"); afterHuman(); } };
+  $("plentyU").onclick   = ()=>{ if(isHuman(cur())){ playDev("plenty"); afterHuman(); } };
+  $("monoU").onclick     = ()=>{ if(isHuman(cur())){ playDev("mono"); afterHuman(); } };
   $("tradeBtnU").onclick = ()=>{ if(guardTurn()){ doTrade(); afterHuman(); } };
   $("endTurnU").onclick  = ()=>{ if(guardTurn()){ endTurnGame(); afterHuman(); } };
 
