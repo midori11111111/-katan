@@ -716,7 +716,7 @@ function startMatch(){
 /* ============================================================
    AIチューニング（スライダーで評価軸を生調整）
    ============================================================ */
-let _tuneOpen=false, _tuneRows=[];
+let _tuneOpen=false, _tuneRows=[], _tuneStash={};
 const TUNE_GROUPS = [
   { title:["配置：資源の重み","Placement: resource weights"],
     hint:["頂点の手書き評価。現行AI・最善手表示に反映（挑戦者の初期2軒は学習モデルなので不変）。効きは下の『学習モデル比』にも依存。",
@@ -734,7 +734,7 @@ const TUNE_GROUPS = [
       {ja:"港（基礎）",en:"Port (base)",min:0,max:3,step:0.05,def:1.0,get:()=>BEST_W.portBase,set:v=>BEST_W.portBase=v},
       {ja:"港（資源一致）",en:"Port (match)",min:0,max:3,step:0.05,def:0.9,get:()=>BEST_W.portMatch,set:v=>BEST_W.portMatch=v},
       {ja:"同数字重ね",en:"Same-number",min:0,max:3,step:0.05,def:0.9,get:()=>BEST_W.sameNumber,set:v=>BEST_W.sameNumber=v},
-      {ja:"学習モデル比 (0=手書き / 1=モデル)",en:"Model blend (0=hand / 1=model)",min:0,max:1,step:0.05,def:0.75,get:()=>MODEL_BLEND,set:v=>MODEL_BLEND=v},
+      {ja:"学習モデル比 (0=手書き / 1=モデル)",en:"Model blend (0=hand / 1=model)",min:0,max:1,step:0.05,def:0.75,get:()=>MODEL_BLEND,set:v=>MODEL_BLEND=v,noIgnore:true},
     ]},
   { title:["本編：行動の重み","Main game: action weights"],
     rows:[
@@ -753,7 +753,7 @@ const TUNE_GROUPS = [
     ]},
   { title:["道・妨害","Roads & disruption"],
     rows:[
-      {ja:"妨害する相手のVP",en:"Disrupt at rival VP",min:6,max:10,step:1,def:8,get:()=>DANGER_VP,set:v=>DANGER_VP=v},
+      {ja:"妨害する相手のVP",en:"Disrupt at rival VP",min:6,max:10,step:1,def:8,get:()=>DANGER_VP,set:v=>DANGER_VP=v,noIgnore:true},
     ],
     toggles:[
       {ja:"無駄道を温存する",en:"Conserve roads",def:true,get:()=>CONSERVE_ROADS,set:v=>CONSERVE_ROADS=v},
@@ -766,12 +766,13 @@ function buildTunePanel(){
   _tuneRows=[];
   const L=a=>LANG==="en"?a[1]:a[0];
   let h=`<div class="tune-head"><b>${LANG==="en"?"AI Tuning":"AI調整"}</b><button class="btn sm ghost" id="tuneClose" title="close">✕</button></div>`;
-  h+=`<div class="tune-scroll"><div class="tune-note">${LANG==="en"?"Sliders change the AI live — the evaluation values and the AI's next moves update immediately.":"スライダーは即座にAIへ反映されます（評価値も次の一手も即変化）。"}</div>`;
+  h+=`<div class="tune-scroll"><div class="tune-note">${LANG==="en"?"Sliders change the AI live — evaluation values and the AI's next moves update immediately. Higher = the AI weights that factor more; 0 = ignored. Uncheck a row's box to drop that axis entirely (weight 0).":"スライダーは即座にAIへ反映（評価値も次の一手も即変化）。右ほどその要素を重く評価し、0で無視。各行の左のチェックを外すと、その評価軸を丸ごと無効化します（重み0）。"}</div>`;
   TUNE_GROUPS.forEach((g,gi)=>{
     h+=`<div class="tune-grp"><div class="tune-gt">${L(g.title)}</div>`;
     if(g.hint) h+=`<div class="tune-hint">${L(g.hint)}</div>`;
     (g.rows||[]).forEach((r,ri)=>{ const id=`tr_${gi}_${ri}`, v=r.get();
-      h+=`<div class="tune-row"><label for="${id}">${LANG==="en"?r.en:r.ja}</label><input type="range" id="${id}" min="${r.min}" max="${r.max}" step="${r.step}" value="${v}"><span class="tune-val" id="${id}v">${_tuneFmt(v)}</span></div>`; });
+      const en = r.noIgnore ? `<span class="en-spacer"></span>` : `<input type="checkbox" class="en" id="en_${gi}_${ri}" checked title="${LANG==="en"?"Uncheck = AI ignores this axis":"外すとAIがこの軸を無視"}">`;
+      h+=`<div class="tune-row" id="row_${gi}_${ri}">${en}<label for="${id}">${LANG==="en"?r.en:r.ja}</label><input type="range" id="${id}" min="${r.min}" max="${r.max}" step="${r.step}" value="${v}"><span class="tune-val" id="${id}v">${_tuneFmt(v)}</span></div>`; });
     (g.toggles||[]).forEach((r,ti)=>{ const id=`tt_${gi}_${ti}`;
       h+=`<div class="tune-row tog"><label for="${id}">${LANG==="en"?r.en:r.ja}</label><input type="checkbox" id="${id}" ${r.get()?"checked":""}></div>`; });
     h+=`</div>`;
@@ -781,6 +782,12 @@ function buildTunePanel(){
   TUNE_GROUPS.forEach((g,gi)=>{
     (g.rows||[]).forEach((r,ri)=>{ const id=`tr_${gi}_${ri}`, el=$(id), vv=$(id+"v");
       el.oninput=()=>{ const v=parseFloat(el.value); r.set(v); vv.textContent=_tuneFmt(v); _tuneApplied(); };
+      if(!r.noIgnore){ const cb=$(`en_${gi}_${ri}`), row=$(`row_${gi}_${ri}`);
+        cb.onchange=()=>{
+          if(cb.checked){ const rv=(_tuneStash[id]!=null)?_tuneStash[id]:r.def; r.set(rv); el.disabled=false; el.value=rv; vv.textContent=_tuneFmt(rv); row.classList.remove("off"); }
+          else { _tuneStash[id]=r.get(); r.set(0); el.disabled=true; el.value=0; vv.textContent="OFF"; row.classList.add("off"); }
+          _tuneApplied();
+        }; }
       _tuneRows.push({el,vv,r,type:"range"}); });
     (g.toggles||[]).forEach((r,ti)=>{ const id=`tt_${gi}_${ti}`, el=$(id);
       el.onchange=()=>{ r.set(el.checked); _tuneApplied(); };
@@ -789,7 +796,7 @@ function buildTunePanel(){
   $("tuneClose").onclick=closeTune; $("tuneReset").onclick=resetTune; $("tuneCopy").onclick=copyTuneSettings;
 }
 function refreshTuneValues(){ _tuneRows.forEach(t=>{ if(t.type==="range"){ const v=t.r.get(); t.el.value=v; t.vv.textContent=_tuneFmt(v); } else { t.el.checked=!!t.r.get(); } }); }
-function resetTune(){ TUNE_GROUPS.forEach(g=>{ (g.rows||[]).forEach(r=>r.set(r.def)); (g.toggles||[]).forEach(r=>r.set(r.def)); }); refreshTuneValues(); _tuneApplied(); toast(LANG==="en"?"Reset to defaults":"既定値に戻しました"); }
+function resetTune(){ TUNE_GROUPS.forEach(g=>{ (g.rows||[]).forEach(r=>r.set(r.def)); (g.toggles||[]).forEach(r=>r.set(r.def)); }); _tuneStash={}; buildTunePanel(); _tuneApplied(); toast(LANG==="en"?"Reset to defaults":"既定値に戻しました"); }
 function copyTuneSettings(){
   const s=`// AI tuning — paste into engine.js (site) / zoo.js (benchmark)
 BEST_W.resFactor={ore:${BEST_W.resFactor.ore}, wheat:${BEST_W.resFactor.wheat}, wood:${BEST_W.resFactor.wood}, brick:${BEST_W.resFactor.brick}, sheep:${BEST_W.resFactor.sheep}};
