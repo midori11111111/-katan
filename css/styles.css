@@ -80,7 +80,7 @@ body[data-mode="mobile"] .appmain{
 }
 
 /* ---------- 盤面 ---------- */
-#boardRegion{grid-area:board; min-width:0; min-height:0; display:flex}
+#boardRegion{grid-area:board; min-width:0; min-height:0; display:flex; flex-direction:column}
 .boardwrap{position:relative; background:linear-gradient(180deg,#0e2233,#0a1a28);
   border:1px solid var(--line); border-radius:var(--radius); padding:8px;
   box-shadow:0 8px 30px rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; overflow:hidden}
@@ -244,8 +244,8 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 .seatrow .youtag{color:var(--gold); font-weight:800; font-size:13px}
 .startrow{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
 
-/* ---------- リプレイバー ---------- */
-#replayBar{display:none; position:absolute; left:8px; right:8px; bottom:8px; z-index:12;
+/* ---------- リプレイバー（盤面の下にドッキング。盤面を覆わない） ---------- */
+#replayBar{display:none; flex:0 0 auto; margin-top:8px; max-height:42vh; overflow:auto;
   background:rgba(16,21,28,.95); border:1px solid var(--gold); border-radius:12px; padding:9px 11px; box-shadow:0 10px 30px rgba(0,0,0,.5)}
 #replayBar .rvtop{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 #replayBar .rvtop .spacer{flex:1}
@@ -258,6 +258,11 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 .rvtable tr.rvt{background:rgba(255,255,255,.05)}
 #rvEvents{margin-top:6px; font-size:12px; color:var(--muted); max-height:70px; overflow:auto}
 #rvEvents > div{padding:1px 0}
+/* リプレイ中はスマホの盤面を縮めて、盤面＋リプレイバーが両方収まるように */
+body[data-mode="mobile"].replaying svg#board{max-height:26vh; max-height:26dvh}
+body[data-mode="mobile"].replaying #replayBar{max-height:34vh}
+/* 手札見出しの手番注記 */
+.handhead .ht .turnnote{color:var(--gold); font-weight:600; font-size:11px; margin-left:6px}
 
 /* ---------- トースト ---------- */
 .toast{position:fixed; left:50%; bottom:calc(22px + env(safe-area-inset-bottom)); transform:translateX(-50%) translateY(20px);

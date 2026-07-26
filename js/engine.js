@@ -3016,7 +3016,62 @@ function robberAdviceSmart(top){
   }
   return best || fallback;   // 自分を止めない狙い先が無ければ次善策
 }
+// [遅延盗賊 H9/H10] 相手の「直近の次の建設」を最も遅らせる置き方。人間棋譜の一致率で検証済み
+//  （強い人間の実手一致 36% vs 従来0%）かつ自己対戦で無害（49.5%/600局）。既定ON。
+//  各候補ヘクスへ盗賊を仮置きし、相手の次建設のturnsToAfford増分（遅延）を、
+//  「今すぐ建ちそう」なほど重く(imminence)・脅威の高い相手ほど重く(threatW)加点。自分を止める分は減点。
+let ROBBER_DELAY=true;
+function _nextBuildCostRD(q){
+  const nc=(placements[q].cities?placements[q].cities.size:0), ns=placements[q].settlements.size;
+  const cands=[];
+  if(ns>0 && nc<4) cands.push(COST.city);
+  if(ns+nc<7) cands.push(COST.settlement);
+  cands.push(COST.dev);
+  let best=cands[0], bt=Infinity;
+  for(const c of cands){ const t=turnsToAfford(q,c); if(t<bt){ bt=t; best=c; } }
+  return {cost:best, turns:bt};
+}
+function robberAdviceDelay(me){
+  const saved=game.robber;
+  const opp=game.order.filter(q=>q!==me);
+  const cost={}, base={};
+  const maxTh=Math.max(1, ...opp.map(q=>{ try{return threatOf(q);}catch(e){return 1;} }));
+  for(const q of opp){ const nb=_nextBuildCostRD(q); cost[q]=nb.cost; base[q]=nb.turns; }
+  const myNb=_nextBuildCostRD(me), myBase=myNb.turns;
+  let best=null, fallback=null;
+  for(const hx of GEO.hexes){
+    if(hx.id===saved) continue;
+    const b=board[hx.id]; if(!b||!b.number||!b.resource||b.resource==="desert") continue;
+    game.robber=hx.id;
+    let score=0, hitsOpp=false, hitsMe=false;
+    for(const q of opp){
+      if(!_hexHasBuildingOf(hx.id,q)) continue;
+      hitsOpp=true;
+      const delta=Math.max(0, turnsToAfford(q,cost[q]) - base[q]);
+      const imminence=1/(1+base[q]);                 // 早い建設ほど重い
+      const threatW=0.5+0.5*(threatOf(q)/maxTh);     // 脅威の高い相手ほど重い
+      score += delta*imminence*threatW;
+    }
+    if(_hexHasBuildingOf(hx.id,me)){
+      hitsMe=true;
+      score -= Math.max(0, turnsToAfford(me,myNb.cost) - myBase)*1.2;   // 自分の首を絞めない
+    }
+    const cand={hid:hx.id, sc:score, top:null, res:b.resource, num:b.number};
+    if(!hitsOpp){ continue; }
+    if(hitsMe){ if(!fallback||score>fallback.sc) fallback=cand; }
+    else { if(!best||score>best.sc) best=cand; }
+  }
+  game.robber=saved;
+  const pick = best || fallback;
+  if(pick){   // 奪う相手は同タイル上の最脅威者
+    let tp=null, tv=-Infinity;
+    for(const q of opp){ if(_hexHasBuildingOf(pick.hid,q)){ let t; try{t=threatOf(q);}catch(e){t=vpOf(q);} if(t>tv){ tv=t; tp=q; } } }
+    pick.top=tp;
+  }
+  return pick;
+}
 function robberAdvice(){
+  if(typeof ROBBER_DELAY!=="undefined" && ROBBER_DELAY){ try{ const _r=robberAdviceDelay(cur()); if(_r) return _r; }catch(e){} }
   let top=null;
   // vs AI対戦中か（game.aiがあり、人間席が1つ以上ある）を判定
   const _vsHuman = (typeof ROBBER_TARGET_HUMAN!=="undefined" && ROBBER_TARGET_HUMAN

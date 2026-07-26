@@ -332,6 +332,16 @@ function uiSeat(){
   if(game.phase==="setup" && game.setup) return game.setup.queue[game.setup.step];                        // 配置中の席
   return cur();
 }
+// 手札バーに表示する席: 人間の番/捨て/配置中はその席、AI(他人)の番でも「自分(人間)の手札」を出し続ける。
+// （全AI観戦時のみ従来どおり手番席）。他人のターンでも自分の手札が見えない問題への対応。
+function viewSeat(){
+  if(!game) return humanSeat;
+  const s=uiSeat();
+  if(isHuman(s)) return s;
+  const humans=game.order.filter(q=>isHuman(q));
+  if(!humans.length) return s;
+  return humans.includes(humanSeat)?humanSeat:humans[0];
+}
 
 function updateGamePanel(){
   if(!game) return;
@@ -390,14 +400,17 @@ function updatePrompt(activeSeat){
 }
 
 function renderHand(){
-  const me=uiSeat(), box=$("myCards");
+  const me=viewSeat(), box=$("myCards");
   const htEl=document.querySelector(".handhead .ht");
-  if(!isHuman(me)){   // AIの番: 手札は非公開
+  if(!isHuman(me)){   // 全AI観戦時のみ: 手札は非公開
     if(htEl) htEl.textContent = (LANG==="en"?`P${me} (AI)`:`P${me}（AI）の番`);
     box.innerHTML = `<div class="handai">${LANG==="en"?`🤖 P${me} (AI) is playing — hand hidden`:`🤖 P${me}（AI）の番 — 手札は非公開`}</div>`;
     return;
   }
-  if(htEl) htEl.textContent = (LANG==="en"?`P${me} — your hand`:`P${me} の手札`);
+  // 自分の手札は常に表示。手番が他者(AI等)なら、その旨を添える。
+  const turnNote = (isHuman(me) && cur()!==me && game.phase!=="over")
+    ? (LANG==="en"?` · P${cur()} ${seatAiName(cur())}'s turn`:` ・${seatTag(cur())}の番`) : "";
+  if(htEl) htEl.innerHTML = (LANG==="en"?`P${me} — your hand`:`P${me} の手札`) + `<small class="turnnote">${turnNote}</small>`;
   box.innerHTML="";
   const discarding = game.phase==="discard" && game.discardQueue[0] && game.discardQueue[0].p===me;
   for(const r of RES5){
@@ -416,8 +429,8 @@ function humanDiscard(r){
   refresh(); aiMaybeGo();
 }
 function renderMyDev(){
-  const me=uiSeat(), box=$("myDev"); box.innerHTML="";
-  if(!isHuman(me)){ box.innerHTML=`<span class="devchip">${t("dev_deck_chip",{n:game.dev.deck.length})}</span>`; return; }  // AIの発展カードは非公開
+  const me=viewSeat(), box=$("myDev"); box.innerHTML="";
+  if(!isHuman(me)){ box.innerHTML=`<span class="devchip">${t("dev_deck_chip",{n:game.dev.deck.length})}</span>`; return; }  // 全AI観戦時のみ非公開
   const h=game.dev.hands[me]; const chips=[];
   const devKey={knight:"dev_knight",roads:"dev_roads",plenty:"dev_plenty",mono:"dev_mono",vp:"dev_vp"};
   for(const c of ["knight","roads","plenty","mono","vp"]) if(h[c]>0) chips.push(`<span class="devchip">${t(devKey[c])} <b>×${h[c]}</b></span>`);
@@ -425,8 +438,8 @@ function renderMyDev(){
   box.innerHTML=chips.join("");
 }
 function renderMeStat(){
-  const me=uiSeat(), over=game.phase==="over";
-  if(!isHuman(me)){   // AIの番: 公開情報のみ（VPは隠しカードを含むため出さない）
+  const me=viewSeat(), over=game.phase==="over";
+  if(!isHuman(me)){   // 全AI観戦時のみ: 公開情報のみ（VPは隠しカードを含むため出さない）
     $("meStat").innerHTML = `<span class="dot" style="background:${PCOLORS[me-1]}"></span>P${me} <span class="ai">${seatAiName(me)}</span>`
       + `<span class="sep">${t("lbl_knights")} <b>${game.army[me]}</b></span>`
       + `<span class="sep">${t("lbl_road")} <b>${longestRoadOf(me)}</b></span>`;
@@ -468,7 +481,7 @@ function renderOpponents(activeSeat){
   const box=$("oppPanel"); box.innerHTML="";
   const over=game.phase==="over";
   for(let q=1;q<=numPlayers;q++){
-    if(q===uiSeat()) continue;   // いま手札を表示している席は除く（残り全員をカウントのみで表示＝人間同士も伏せる）
+    if(q===viewSeat()) continue;   // いま手札バーに出している自分の席は除く（残りをカウントのみ表示）
     const devN=Object.values(game.dev.hands[q]).reduce((a,b)=>a+b,0);
     const turn=(q===activeSeat)&&!over;
     const vpCard = over && game.dev.hands[q].vp>0 ? ` <span class="badge sm">${t("vpcards",{n:game.dev.hands[q].vp})}</span>` : "";
@@ -587,7 +600,7 @@ function startReplay(){
   if(!game || !game.turns || !game.turns.length){ toast(t("toast_no_record")); return; }
   paused=true; updatePauseBtn(); clearTimeout(aiTimer);
   replay={turns:game.turns, idx:0, active:true};
-  $("replayBar").style.display="block";
+  $("replayBar").style.display="block"; document.body.classList.add("replaying");
   showReplayTurn();
 }
 function stopRvPlay(){ if(rvPlayTimer){ clearInterval(rvPlayTimer); rvPlayTimer=null; } updateRvButtons(); }
@@ -601,7 +614,7 @@ function toggleRvPlay(){
   },900);
   updateRvButtons();
 }
-function exitReplayU(){ stopRvPlay(); exitReplay(); if(game) render(); }
+function exitReplayU(){ stopRvPlay(); exitReplay(); document.body.classList.remove("replaying"); if(game) render(); }
 function updateRvButtons(){
   $("rvPrev").textContent=t("rv_prev"); $("rvNext").textContent=t("rv_next"); $("rvExit").textContent=t("rv_close");
   $("rvPlay").textContent = rvPlayTimer ? t("rv_stop") : t("rv_auto");
@@ -633,7 +646,7 @@ function toggleEval(){ evalOn=!evalOn; updateEvalBtn(); if(game) refresh(); }
 function setSpeed(v){ aiSpeedSec=v; $("speedLabel").textContent = v===0 ? (LANG==="en"?"Fastest":"最速") : v.toFixed(1)+(LANG==="en"?"s":"秒"); }
 function newMatch(){
   clearTimeout(aiTimer); aiBusy=false; stopRvPlay();
-  if(replay) replay.active=false; $("replayBar").style.display="none";
+  if(replay) replay.active=false; $("replayBar").style.display="none"; document.body.classList.remove("replaying");
   if(game) endGameMode();
   $("startScreen").classList.remove("hidden");
   $("exportBtn").disabled=true; $("replayBtn").disabled=true; _overHandled=false;
@@ -721,7 +734,7 @@ function startMatch(){
   paused=false; updatePauseBtn();
   $("startScreen").classList.add("hidden");
   $("exportBtn").disabled=false; $("replayBtn").disabled=true;
-  if(replay) replay.active=false; $("replayBar").style.display="none";
+  if(replay) replay.active=false; $("replayBar").style.display="none"; document.body.classList.remove("replaying");
   if(uiMode==="mobile") setMobileTab("status");
   toast(humans.length
     ? (LANG==="en"?`Game start — humans: ${humans.map(x=>"P"+x).join(", ")}`:`対局開始 — 人間: ${humans.map(x=>"P"+x).join("・")}`)
