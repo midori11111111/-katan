@@ -100,8 +100,16 @@ function fastMctsPickHTML(sp) {
   } catch (e) { return null; }
 }
 
-// ---- 蒸留評価器（16特徴・両軒対応・プレイアウト不要で一瞬・最強）----
+// [HP1] 港シナジー: 配置席が"他の家"で産む港資源pip(=余剰)で港を加点（人間模倣のみON）。
+//   distillのportMatch特徴は"この頂点自身が港資源を産むか"しか見ず、強い麦港を過小評価する。
+//   人間の物差しで検証済み(麦港v38が5位→上位へ, 自己対戦51.7%)。人間由来なので変種フラグで席別ON/OFF。
+let HP1_PORT = true; let HP1_PORT_W = 0.012;
+// ---- 蒸留評価器（16特徴・両軒対応・プレイアウト不要で一瞬）----
+//  _FS_DISTILL_W = 自己対戦66%再現の重み。「挑戦者(関与なし)=cpure」の配置に使う純・自己対戦モデル(人間データ不使用)。
 const _FS_DISTILL_W = [-0.3164309691450159, 0.01382550407550897, -0.0018099433636406563, 0.0025212641131526965, 0.005186137922594357, 0.013799368662142665, -0.0008417492162801521, 0.06373542421602327, 0.059950619605857625, 0.014290710482826393, 0.02407666200321394, 0.001697021076044727, 0.01983209143632298, 0.008970709907792683, -0.014287769963356333, 0.0010147174751369604, 0.2641943120217746];
+//  _FS_DISTILL_W_BC = behavioral cloning重み（記録棋譜14手で人間一致再蒸留: distill top3 50%→ in-sample100%/LOGO71%）。
+//   人間由来。将来「人間模倣」を重いcomputeBestから高速distillへ切替える時用に保管。再学習: node bclone.js。
+const _FS_DISTILL_W_BC = [-0.3164309691450159, 0.03363322992911555, 0.01290754873525962, 0.030466066932211038, 0.008799106848590964, 0.022259377050732214, -0.0018168694139962633, 0.11267761151062815, 0.02888229870813685, 0.01839872823546419, 0.04232914601951257, 0.001697021076044727, 0.057008785561947134, 0.02642374645797298, -0.02038613056838122, 0.030156296561484556, 0.25539921498070184];
 function _fsFeatH(g, v, p) {
   let pip = 0, po = 0, pw = 0, pwo = 0, pb = 0, ps = 0; const res = {}; const numCount = {}; const rp = {};
   const hs = _fsVHexes[v];
@@ -121,7 +129,12 @@ function distillPickHTML(sp) {
   try {
     const g = _fsFromHeavy();
     let bv = -1, bs = -1e9;
-    for (let v = 0; v < _fsNV; v++) { if (!_fsLegal(g, v)) continue; const x = _fsFeatH(g, v, sp); let sc = _FS_DISTILL_W[0]; for (let k = 0; k < x.length; k++) sc += _FS_DISTILL_W[k + 1] * x[k]; if (sc > bs) { bs = sc; bv = v; } }
+    for (let v = 0; v < _fsNV; v++) { if (!_fsLegal(g, v)) continue; const x = _fsFeatH(g, v, sp); let sc = _FS_DISTILL_W[0]; for (let k = 0; k < x.length; k++) sc += _FS_DISTILL_W[k + 1] * x[k];
+      if (HP1_PORT) { const pt = g.portOf[v];   // [HP1] 港シナジー加点
+        if (pt >= 0 && pt < 5 && sp && g.builds[sp]) { let surplus = 0;
+          for (const bvv of g.builds[sp]) for (const h of _fsVHexes[bvv]) { if (g.res[h] === pt) surplus += g.pip[h] * ((g.vCity && g.vCity[bvv]) ? 2 : 1); }
+          sc += HP1_PORT_W * surplus; } }
+      if (sc > bs) { bs = sc; bv = v; } }
     if (bv < 0 || occupantOf(bv)) return null;
     for (const n of (GEO.vertex_neighbors[String(bv)] || [])) if (occupantOf(n)) return null;
     return bv;
@@ -230,8 +243,14 @@ function buildingVpOf(p){
   return placements[p].settlements.size + 2*(placements[p].cities?placements[p].cities.size:0);
 }
 function checkWin(){
+  if(game.phase==="over") return;
   const p=cur();
-  if(vpOf(p)>=game.vpToWin){ game.phase="over"; toast(`🏆 P${p} が ${vpOf(p)}点で勝利！`); }
+  if(vpOf(p)>=game.vpToWin){
+    // 勝利ターンを棋譜に残す。勝利は建設途中に確定しendTurnGameが走らないため、
+    // ここで snapshotTurn しないと「勝者が10点に到達した決定的な最終ターン」が丸ごと欠落する。
+    try{ snapshotTurn(); }catch(e){}
+    game.phase="over"; toast(`🏆 P${p} が ${vpOf(p)}点で勝利！`);
+  }
 }
 
 function startGame(fromReplayTurn){
@@ -295,6 +314,10 @@ function glog(msg){
     box.scrollTop=box.scrollHeight;
   }
 }
+// このターンで起きた「棋譜のスナップショットからは復元できない行動」を構造化して記録する。
+// 交易 / 発展カード購入・使用（収穫・独占・騎士の対象）/ 捨て札 / 盗賊移動・強奪。
+// snapshotTurn 時に turn.actions として書き出し、humanagree等が機械的に読めるようにする。
+function _recAct(o){ if(!game) return; if(!game._acts) game._acts=[]; game._acts.push(o); }
 // 現在の盤面状態を棋譜1コマとして記録（都市も含める）
 function snapshotTurn(){
   if(!game) return;
@@ -310,7 +333,9 @@ function snapshotTurn(){
   const tn = game.turns.filter(t=>!t.setup).length + 1;   // 初期配置のコマは番号に数えない
   const title = `ターン ${tn}`;
   game.turns.push({sett, city, road, robber:game.robber, dice:game.dice, player:cur(),
-                   title, hands:_snapHands(), events: lastMsgs.length?lastMsgs:["（このターンの動きなし）"]});
+                   title, hands:_snapHands(), events: lastMsgs.length?lastMsgs:["（このターンの動きなし）"],
+                   actions:(game._acts||[])});
+  game._acts=[];   // 次ターン用にリセット
 }
 // 各プレイヤーの手札・発展カード・VPを棋譜に残す（棋譜で手札を確認できるように）
 function _snapHands(){
@@ -336,8 +361,8 @@ function _snapSetupStep(sp, what){
   game.turns.push({setup:true, sett, city, road, robber:game.robber, dice:null, player:sp,
                    title:`初期配置 ${n}／${numPlayers*4}　P${sp} が${what}`,
                    hands:_snapHands(),
-                   events:[`P${sp} が${what}を置いた`]});
-  game._logMark = game.log.length;
+                   events:[`P${sp} が${what}を置いた`], actions:(game._acts||[])});
+  game._logMark = game.log.length; game._acts=[];
 }
 
 // --- サイコロと分配 ---
@@ -374,21 +399,25 @@ function distribute(total){
       (want[b.resource]=want[b.resource]||{}); want[b.resource][oc.p]=(want[b.resource][oc.p]||0)+n;
     }
   }
-  const gains=[];
+  const gains=[]; const by={};   // by[player][res]=枚数（銀行切れも反映した実配分）
+  const _add=(pp,res,n)=>{ (by[pp]=by[pp]||{}); by[pp][res]=(by[pp][res]||0)+n; };
   for(const [res,m] of Object.entries(want)){
     const need=Object.values(m).reduce((a,b)=>a+b,0), bank=bankOf(res);
     const players=Object.keys(m);
-    if(bank>=need){ for(const [pp,n] of Object.entries(m)){ gain(Number(pp),res,n); gains.push(`P${pp}+${n}${RES_JP[res]}`);} }
-    else if(players.length===1){ const pp=Number(players[0]); const n=Math.min(bank,m[players[0]]); if(n>0){gain(pp,res,n); gains.push(`P${pp}+${n}${RES_JP[res]}(銀行切れ)`);} }
+    if(bank>=need){ for(const [pp,n] of Object.entries(m)){ gain(Number(pp),res,n); gains.push(`P${pp}+${n}${RES_JP[res]}`); _add(pp,res,n);} }
+    else if(players.length===1){ const pp=Number(players[0]); const n=Math.min(bank,m[players[0]]); if(n>0){gain(pp,res,n); gains.push(`P${pp}+${n}${RES_JP[res]}(銀行切れ)`); _add(pp,res,n);} }
   }
   toast(gains.length ? `出目${total}: `+gains.join(" ") : `出目${total}: 資源なし`);
   if(gains.length) glog(`資源: ${gains.join(" ")}`);
+  _recAct({a:"roll", total, by});
 }
 
 // --- 盗賊 ---
 function robberMoved(hid){
+  const from=game.robber;
   game.robber=hid;
   glog(`盗賊を移動`);
+  _recAct({a:"robber", p:cur(), from, hex:hid});
   const cands=new Set();
   for(const vid of hexVertsG(hid)){ const oc=occupantOf(vid); if(oc && oc.p!==cur() && handTotal(oc.p)>0) cands.add(oc.p); }
   game.stealCands=[...cands];
@@ -399,7 +428,8 @@ function robberMoved(hid){
 function stealFrom(victim){
   const pool=[]; for(const r of RES5) for(let i=0;i<game.hands[victim][r];i++) pool.push(r);
   if(pool.length){ const r=pool[Math.floor(Math.random()*pool.length)];
-    game.hands[victim][r]--; gain(cur(),r,1); toast(`P${cur()} が P${victim} から1枚奪った`); glog(`P${victim} から1枚奪った`); }
+    game.hands[victim][r]--; gain(cur(),r,1); toast(`P${cur()} が P${victim} から1枚奪った`); glog(`P${victim} から1枚奪った`);
+    _recAct({a:"steal", from:victim, to:cur(), res:r}); }
   finishRobber();
 }
 function finishRobber(){
@@ -420,6 +450,7 @@ function buyDev(){
   game.dev.hands[p][c]++; game.dev.bought[p][c]++;
   toast(`発展カードを購入（${DEV_JP[c]}）`);
   glog(`発展カードを購入`);
+  _recAct({a:"devBuy", p, card:c});
   checkWin(); render(); updateGamePanel();
 }
 function canPlay(card){
@@ -435,6 +466,7 @@ function playDev(card){
   game.dev.hands[p][card]--; game.devPlayed=true;
   if(game.dev.played[p]) game.dev.played[p][card]++;
   glog(`発展カード「${DEV_JP[card]}」を使用`);
+  _recAct({a:"devPlay", p, card});
   if(card==="knight"){
     game.army[p]++; updateLargestArmy();
     game.resume = game.rolled ? "main" : "roll";
@@ -453,6 +485,7 @@ function playDev(card){
 function resolvePlenty(res){
   if(bankOf(res)<=0){ toast("銀行にありません"); return; }
   gain(cur(),res,1); game.ask.picks--;
+  _recAct({a:"plenty", p:cur(), res});
   if(game.ask.picks<=0) game.ask=null;
   render(); updateGamePanel();
 }
@@ -462,6 +495,7 @@ function resolveMono(res){
   gain(cur(),res,got); game.ask=null;
   toast(`独占: ${RES_JP[res]}を${got}枚集めた`);
   glog(`独占で ${RES_JP[res]} を${got}枚回収`);
+  _recAct({a:"mono", p:cur(), res, got});
   render(); updateGamePanel();
 }
 
@@ -487,6 +521,8 @@ function doTrade(){
   if(bankOf(get)<=0){ toast("銀行にありません"); return; }
   game.hands[p][give]-=rate; gain(p,get,1);
   toast(`${RES_JP[give]}×${rate} → ${RES_JP[get]}×1`);
+  glog(`交換 ${RES_JP[give]}×${rate}→${RES_JP[get]}`);
+  _recAct({a:"trade", p, give, get, rate});
   render(); updateGamePanel();
 }
 function buildTradeSelects(){
@@ -540,6 +576,7 @@ function gameClickVertex(vid){
     placements[p].settlements.delete(vid);
     placements[p].cities.add(vid);
     toast("都市化！"); glog("🏛 都市化");
+    _recAct({a:"build", p, kind:"city", id:vid});
     updateLongestRoad(); checkWin(); render(); updateGamePanel(); return;
   }
   if(oc){ toast("そこは使用中です"); return; }
@@ -551,6 +588,7 @@ function gameClickVertex(vid){
   pay(p,COST.settlement);
   placements[p].settlements.add(vid);
   toast("開拓地を建設！"); glog("🏠 開拓地を建設");
+  _recAct({a:"build", p, kind:"settle", id:vid});
   updateLongestRoad(); checkWin(); render(); updateGamePanel();
 }
 function gameClickEdge(eid){
@@ -580,14 +618,16 @@ function gameClickEdge(eid){
   });
   if(!connects){ toast("自分の道か建物につながる場所にだけ置けます"); return; }
   if(placements[p].roads.size>=15){ toast("道は15本までです"); return; }
+  let _freeRoad=false;
   if(game.freeRoads>0){
-    game.freeRoads--; placements[p].roads.add(eid);
+    game.freeRoads--; placements[p].roads.add(eid); _freeRoad=true;
     toast(`道を建設（無料 残り${game.freeRoads}）`); glog("🛤 道を建設（無料）");
   }else{
     if(!canPay(p,COST.road)){ toast("道には 木+レンガ"); return; }
     pay(p,COST.road); placements[p].roads.add(eid);
     toast("道を建設！"); glog("🛤 道を建設");
   }
+  _recAct({a:"build", p, kind:"road", id:eid, free:_freeRoad?1:0});
   updateLongestRoad(); checkWin(); render(); updateGamePanel();
 }
 function gameClickHex(hid){
@@ -745,7 +785,9 @@ function _wPick(items, temp){ // スコア重み付きランダム（tempが小�
 function _tradeBank(p,give,get){ // DOM無しの銀行/港交易
   const rate=rateFor(p,give);
   if(give===get||game.hands[p][give]<rate||bankOf(get)<=0) return false;
-  game.hands[p][give]-=rate; gain(p,get,1); return true;
+  game.hands[p][give]-=rate; gain(p,get,1);
+  _recAct({a:"trade", p, give, get, rate});
+  return true;
 }
 // 目標コストに向けて、余剰資源を銀行/港交換でかき集める。都市化不能(母体なし)からの脱出用。
 
@@ -964,7 +1006,7 @@ function _botDiscard(){ // 捨て: 次の建設の予約分を守り、余剰か
   // 次の目標: 都市化できる母体があれば都市、無ければ開拓地
   const reserve = (placements[p].settlements.size>0 && placements[p].cities.size<4) ? COST.city : COST.settlement;
   // 余剰が多い資源から捨てる
-  let guard=0;
+  let guard=0; const disc={};
   while(d.need>0 && guard++<30){
     let pick=null, best=-1e9;
     for(const r of RES5){
@@ -973,8 +1015,9 @@ function _botDiscard(){ // 捨て: 次の建設の予約分を守り、余剰か
       if(surplus>best){ best=surplus; pick=r; }
     }
     if(!pick) break;
-    game.hands[p][pick]--; d.need--;
+    game.hands[p][pick]--; d.need--; disc[pick]=(disc[pick]||0)+1;
   }
+  if(Object.keys(disc).length) _recAct({a:"discard", p, res:disc});
   game.discardQueue.shift();
   if(!game.discardQueue.length) game.phase="robber";
 }
@@ -1960,6 +2003,19 @@ const BEST_W={
   portMatch:0.9,     // 2:1港×その資源の量産はエンジンになる
   sameNumber:0.9,    // 同じ数字の重ね置き(8&8等)の爆発力ボーナス
 };
+// [HP1] 港シナジー: 配置席が"他の家"で産む港資源pip(=余剰)で港を加点（人間一致で検証済み）。
+let PORT_SYNERGY=true; let PORT_SYNERGY_W=0.7;
+// [模倣優先] 初期配置を「人間に最も近い」computeBest(静的+モデル+港シナジー)で打つ。
+//   実測(4棋譜): computeBest top3=86% vs distill top3=50%。distillは自己対戦66%最適化で人間から乖離。
+//   後で"強くする"段階に入ったら false に戻すと蒸留配置へ戻る（可逆）。
+let HUMAN_SETUP=true;
+function _seatResPip(seat, res){
+  if(seat==null || !placements[seat]) return 0;
+  let pip=0;
+  for(const kind of ["settlements","cities"]){ const set=placements[seat][kind]; if(!set) continue; const mult=kind==="cities"?2:1;
+    for(const vid of set) for(const hid of (GEO.vertex_hexes[String(vid)]||[])){ const b=board[hid]; if(b&&b.number&&b.resource===res) pip+=pipOf(b.number)*mult; } }
+  return pip;
+}
 function computeBest(resFactorOverride){
   const RF = resFactorOverride || (SCORE_RF || BEST_W.resFactor);
   // 現在配置中の席が既に触れている資源（2軒目の多様性を「新規分だけ」で測るため）
@@ -2018,6 +2074,11 @@ function computeBest(resFactorOverride){
         ? ((typeof game!=="undefined" && game && game.setup && SINGLE_DIVERSITY.has(game.setup.queue[game.setup.step])) ? SINGLE_DIVERSITY._w||8 : 0)
         : _sd;
       if(_sdSeat>0) sc += _sdSeat * res.size;
+    }
+    if(typeof PORT_SYNERGY!=="undefined" && PORT_SYNERGY && pt && pt!=="3:1"){   // [HP1] 港シナジー（モデルブレンド後）
+      const _ps = (typeof game!=="undefined" && game && game.setup) ? game.setup.queue[game.setup.step]
+                : ((typeof game!=="undefined" && game && game.order) ? cur() : null);
+      if(_ps!=null) sc += PORT_SYNERGY_W * _seatResPip(_ps, pt);
     }
     scores[vtx.id]={score:sc, pip, div:res.size, port:!!pt};
     if(sc<mn)mn=sc; if(sc>mx)mx=sc;

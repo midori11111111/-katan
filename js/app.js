@@ -22,12 +22,12 @@ const I18N = {
     pause_title:"一時停止", play_title:"再生",
     mode_pc:"PC表示", mode_mobile:"スマホ表示",
     setup_title:"対局の設定",
-    setup_lead:"あなたの席と、相手AI3人のタイプを選んで対局を始めます。<br><b>挑戦者AI</b>=高速先読みで初期配置を選ぶ最強型／<b>現行AI</b>=学習モデルの標準型。",
+    setup_lead:"各席のAIタイプを選んで対局。<br><b>挑戦者(関与なし)</b>=自己対戦だけで学習・人間データ不使用／<b>人間模倣</b>=強者棋譜由来の港評価・遅延盗賊・人間寄り配置ON／<b>現行AI</b>=従来の標準型。3種を並べて打たせ見比べられます。",
     your_seat:"あなたの席", you_operate:"あなた（この席を操作）",
-    challenger_full:"挑戦者AI（高速先読み・最強）", standard_full:"現行AI（学習モデル・標準）",
+    challenger_full:"人間模倣（強者データ由来）", cpure_full:"挑戦者(関与なし)", standard_full:"現行AI（学習モデル・標準）",
     shuffle_btn:"盤面シャッフル", start_btn:"対局開始",
     start_lang:"言語", start_mode:"画面", lang_ja:"日本語", lang_en:"English",
-    ai_challenger:"挑戦者AI", ai_standard:"現行AI", ai_you:"あなた",
+    ai_challenger:"人間模倣", ai_cpure:"挑戦者(関与なし)", ai_standard:"現行AI", ai_you:"あなた",
     tab_status:"状況", tab_eval:"AI評価値", tab_log:"ログ", tab_bank:"銀行", tab_opp:"相手",
     log_title:"ログ", bank_title:"銀行", bank_left:"残りカード", bank_deck:"発展カード山札",
     devplayed_title:"使用済み", tally_knight:"騎士", tally_road:"街道", tally_plenty:"収穫", tally_mono:"独占",
@@ -89,12 +89,12 @@ const I18N = {
     pause_title:"Pause", play_title:"Play",
     mode_pc:"PC view", mode_mobile:"Mobile view",
     setup_title:"Game setup",
-    setup_lead:"Pick your seat and the type of each of the 3 opponent AIs, then start.<br><b>Challenger AI</b> = fast-lookahead placement (strongest). <b>Standard AI</b> = learning-model default.",
+    setup_lead:"Pick each seat's AI type, then start.<br><b>Challenger (raw)</b> = self-play only, no human data. <b>Human-imitation</b> = strong-player port valuation, delayed robber, human-like placement ON. <b>Current AI</b> = the previous default. Run all three side by side to compare.",
     your_seat:"Your seat", you_operate:"You (you play this seat)",
-    challenger_full:"Challenger AI (fast lookahead, strongest)", standard_full:"Standard AI (learning model)",
+    challenger_full:"Human-imitation (from strong-player data)", cpure_full:"Challenger (no-human data)", standard_full:"Current AI (learning model)",
     shuffle_btn:"Shuffle board", start_btn:"Start game",
     start_lang:"Language", start_mode:"Display", lang_ja:"日本語", lang_en:"English",
-    ai_challenger:"Challenger AI", ai_standard:"Standard AI", ai_you:"You",
+    ai_challenger:"Human-imitation", ai_cpure:"Challenger (raw)", ai_standard:"Current AI", ai_you:"You",
     tab_status:"Status", tab_eval:"AI eval", tab_log:"Log", tab_bank:"Bank", tab_opp:"Opponents",
     log_title:"Log", bank_title:"Bank", bank_left:"Cards left", bank_deck:"Dev deck",
     devplayed_title:"Played", tally_knight:"Knights", tally_road:"Roads", tally_plenty:"Plenty", tally_mono:"Mono",
@@ -156,7 +156,7 @@ function t(k, a){
   return (typeof v==="function") ? v(a||{}) : v;
 }
 function resName(r){ return t("res_"+r); }
-function seatAiName(p){ const x=seatAI[p]; return x==="challenger"?t("ai_challenger"):x==="puremodel"?t("ai_standard"):t("ai_you"); }
+function seatAiName(p){ const x=seatAI[p]; return x==="challenger"?t("ai_challenger"):x==="cpure"?t("ai_cpure"):x==="puremodel"?t("ai_standard"):t("ai_you"); }
 
 // 日本語ログ/トースト文字列を英語に（エンジンが生成する文言用のベストエフォート変換）
 function _devEn(c){ return String(c).replace(/騎士/g,"Knight").replace(/勝利点/g,"VP").replace(/街道建設/g,"Road building").replace(/収穫/g,"Year of plenty").replace(/独占/g,"Monopoly"); }
@@ -201,9 +201,11 @@ function jaToEn(s){
 /* ============================================================
    UI 状態
    ============================================================ */
-let seatKind = {1:"human",2:"challenger",3:"challenger",4:"challenger"};  // 各席の担当: "human" / "challenger" / "puremodel"
+// 各席の担当: "human" / "cpure"(挑戦者=関与なし) / "challenger"(人間模倣) / "puremodel"(現行AI)
+// 既定は「あなた vs 3変種を1席ずつ」＝3種を直接見比べられる構成（開始画面で自由に変更可）
+let seatKind = {1:"human",2:"cpure",3:"challenger",4:"puremodel"};
 let humanSeat = 1;   // 先頭の人間席（開始時に導出。単一参照が要る箇所の既定フォーカス用）
-let seatAI = {1:"human",2:"challenger",3:"challenger",4:"challenger"};
+let seatAI = {1:"human",2:"cpure",3:"challenger",4:"puremodel"};
 let paused = false;
 let evalOn = false;
 let aiSpeedSec = 1.0;
@@ -260,6 +262,19 @@ function buildTradeSelects(){
 function scheduleAI(base){ if(paused) return; clearTimeout(aiTimer); aiTimer=setTimeout(aiStep, aiDelay(base)); }
 
 // 席別AI・一時停止対応の進行ループ
+// 席の"変種"でグローバルの人間由来フラグを解決する。AI席は1手ずつ順番に動くので、
+//  acting席ごとに切替えれば「関与なし・人間模倣・現行AI」を同一ゲームに共存させられる。
+//  cpure=挑戦者(関与なし): 人間由来を全OFF＋自己対戦蒸留で配置（人間データ不使用）
+//  challenger=人間模倣: 全ON＋computeBest+港シナジーで配置（強者データ由来）
+//  puremodel=現行AI: 全OFF＋computeBest(港なし)で配置（従来のベースライン）
+function _applyVariant(seat){
+  const k = (seat!=null && typeof seatAI!=="undefined") ? seatAI[seat] : null;
+  const human = (k==="challenger");        // 人間模倣だけが人間由来の挙動をONにする
+  try{ PORT_SYNERGY = human; }catch(e){}    // 港シナジー（配置スコア）
+  try{ HP1_PORT     = human; }catch(e){}    // 蒸留の港項（cpureは蒸留を使うがHP1はoff=純自己対戦）
+  try{ ROBBER_DELAY = human; }catch(e){}    // 遅延盗賊（本編）
+  try{ HUMAN_SETUP  = human; }catch(e){}    // 参考フラグ（配置分岐は上でseatAIを直接判定）
+}
 function aiStep(){
   if(!game || !game.ai){ aiBusy=false; return; }
   if(paused){ aiBusy=false; return; }
@@ -269,9 +284,14 @@ function aiStep(){
     const sp = game.setup.queue[game.setup.step];
     if(!isAI(sp)){ aiBusy=false; refresh(); return; }
     if(game.setup.phase==="settle"){
+      _applyVariant(sp);            // 席の変種でグローバルフラグ(港/盗賊/HUMAN_SETUP)を解決
       let v=null;
-      if(seatAI[sp]==="challenger" && typeof distillPickHTML==="function") v=distillPickHTML(sp);
+      const _saveActive=(typeof active!=="undefined")?active:undefined;
+      try{ active=sp; }catch(e){}   // computeBestのモデル評価・港シナジーを配置席の視点にする
+      // 変種別の初期配置: 挑戦者(関与なし)=自己対戦蒸留 / 人間模倣=computeBest+港 / 現行AI=computeBest(港なし)
+      if(seatAI[sp]==="cpure" && typeof distillPickHTML==="function") v=distillPickHTML(sp);
       if(v==null || occupantOf(v)) v=computeBest().ranked[0];
+      try{ active=_saveActive; }catch(e){}
       gameClickVertex(v);
     } else {
       const oc=occupantOf(game.setup.lastSettle);
@@ -289,6 +309,7 @@ function aiStep(){
   }
   const p=cur();
   if(!isAI(p)){ aiBusy=false; refresh(); return; }
+  _applyVariant(p);   // acting席の変種で本編フラグ(遅延盗賊など)を解決
   if(game.phase==="roll"){ if(_shouldPlayKnight(p)) playDev("knight"); if(game.phase==="roll") doRoll(null); refresh(); scheduleAI(650); return; }
   if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); refresh(); scheduleAI(550); return; }
   if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); refresh(); scheduleAI(450); return; }
@@ -425,6 +446,7 @@ function humanDiscard(r){
   const d=game.discardQueue[0];
   if(!d || !isHuman(d.p) || game.hands[d.p][r]<=0) return;
   game.hands[d.p][r]--; d.need--;
+  if(typeof _recAct==="function") _recAct({a:"discard", p:d.p, res:{[r]:1}});   // 人間の捨て札も棋譜に記録
   if(d.need<=0){ game.discardQueue.shift(); if(!game.discardQueue.length){ game.phase="robber"; toast(t("toast_robber")); } }
   refresh(); aiMaybeGo();
 }
@@ -713,7 +735,7 @@ function buildStartScreen(){
   const subEl=document.querySelector(".sublabel[data-i18n='your_seat']");
   if(subEl) subEl.textContent = (LANG==="en"?"Who plays each seat (hot-seat OK)":"各席の担当（人間を複数席OK）");
   $("seatPick").innerHTML="";
-  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["challenger",t("challenger_full")],["puremodel",t("standard_full")]];
+  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["cpure",t("cpure_full")],["challenger",t("challenger_full")],["puremodel",t("standard_full")]];
   const grid=$("seatGrid"); grid.innerHTML="";
   for(let s=1;s<=4;s++){
     const row=document.createElement("div"); row.className="seatrow";
