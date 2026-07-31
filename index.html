@@ -28,6 +28,7 @@
       <div class="menu" id="topMenu">
         <button id="replayBtn" class="btn" disabled data-i18n="replay_btn">棋譜確認</button>
         <button id="exportBtn" class="btn" disabled data-i18n="export_btn">棋譜書き出し</button>
+        <button id="loadBtn" class="btn" data-i18n="load_btn">棋譜読込</button>
         <button id="newBtn" class="btn ghost" data-i18n="new_btn">新規対局</button>
         <button id="modeBtn" class="btn ghost">PC表示</button>
         <button id="langBtn" class="btn ghost">English</button>
@@ -144,11 +145,14 @@
     <div class="seatgrid" id="seatGrid"></div>
     <div class="startrow">
       <button id="shuffleBtn" class="btn" data-i18n="shuffle_btn">盤面シャッフル</button>
+      <button id="startLoadBtn" class="btn" data-i18n="load_btn">棋譜読込</button>
       <div class="spacer"></div>
       <button id="startBtn" class="btn primary" data-i18n="start_btn">対局開始</button>
     </div>
   </div>
 </div>
+<input type="file" id="loadInput" accept="application/json,.json" style="display:none">
+
 
 <!-- ===== エンジンが参照する非表示スタブ ===== -->
 <div style="display:none" aria-hidden="true">

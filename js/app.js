@@ -18,7 +18,7 @@ const I18N = {
   ja:{
     brand_title:"カタン 挑戦者AI 対局", brand_sub:"あなた 対 AI3人",
     speed_label:"AI速度", eval_word:"AI評価値",
-    replay_btn:"棋譜確認", export_btn:"棋譜書き出し", new_btn:"新規対局", tune_btn:"⚙ AI調整",
+    replay_btn:"棋譜確認", export_btn:"棋譜書き出し", load_btn:"棋譜読込", new_btn:"新規対局", tune_btn:"⚙ AI調整",
     pause_title:"一時停止", play_title:"再生",
     mode_pc:"PC表示", mode_mobile:"スマホ表示",
     setup_title:"対局の設定",
@@ -80,12 +80,13 @@ const I18N = {
     toast_pause:"AIを一時停止しました", toast_play:"再生します",
     toast_win:a=>`🏆 P${a.p} の勝利！「棋譜確認」で振り返り、「棋譜書き出し」で保存できます。`,
     toast_no_record:"棋譜がまだありません", toast_exported:"棋譜を game_record.json に書き出しました",
+    toast_loaded:"棋譜を読み込みました（再生モード）", toast_load_err:"棋譜の読み込みに失敗しました（JSON形式を確認してください）",
     toast_robber:"盗賊を動かすタイルをクリック"
   },
   en:{
     brand_title:"Catan Challenger AI", brand_sub:"You vs 3 AIs",
     speed_label:"AI speed", eval_word:"AI eval",
-    replay_btn:"Replay", export_btn:"Export record", new_btn:"New game", tune_btn:"⚙ AI Tuning",
+    replay_btn:"Replay", export_btn:"Export record", load_btn:"Load record", new_btn:"New game", tune_btn:"⚙ AI Tuning",
     pause_title:"Pause", play_title:"Play",
     mode_pc:"PC view", mode_mobile:"Mobile view",
     setup_title:"Game setup",
@@ -147,6 +148,7 @@ const I18N = {
     toast_pause:"AI paused", toast_play:"Playing",
     toast_win:a=>`🏆 P${a.p} wins! Use "Replay" to review and "Export record" to save.`,
     toast_no_record:"No record yet", toast_exported:"Exported to game_record.json",
+    toast_loaded:"Record loaded (replay mode)", toast_load_err:"Failed to load record (check the JSON)",
     toast_robber:"Click a tile to move the robber"
   }
 };
@@ -636,7 +638,7 @@ function toggleRvPlay(){
   },900);
   updateRvButtons();
 }
-function exitReplayU(){ stopRvPlay(); exitReplay(); document.body.classList.remove("replaying"); if(game) render(); }
+function exitReplayU(){ stopRvPlay(); exitReplay(); document.body.classList.remove("replaying"); if(game) render(); else $("startScreen").classList.remove("hidden"); }
 function updateRvButtons(){
   $("rvPrev").textContent=t("rv_prev"); $("rvNext").textContent=t("rv_next"); $("rvExit").textContent=t("rv_close");
   $("rvPlay").textContent = rvPlayTimer ? t("rv_stop") : t("rv_auto");
@@ -651,6 +653,45 @@ function exportRecord(){
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="game_record.json";
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   toast(t("toast_exported"));
+}
+
+// 棋譜(JSON)を読み込んで再生モードに入る。ファイル選択→FileReader→engineのfromJSON()。
+function loadRecord(){ const inp=$("loadInput"); if(inp){ inp.value=""; inp.click(); } }
+function onLoadFile(ev){
+  const f = ev.target.files && ev.target.files[0]; if(!f) return;
+  const rd = new FileReader();
+  rd.onerror = ()=>toast(t("toast_load_err"));
+  rd.onload = ()=>{
+    let data;
+    try{ data = JSON.parse(rd.result); }catch(e){ toast(t("toast_load_err")); return; }
+    if(!data || !data.board || !data.board.hexes || !Array.isArray(data.replay) || !data.replay.length){ toast(t("toast_load_err")); return; }
+    try{
+      // ライブ対局を止めて再生専用状態にする（fromJSONは旧エディタUI依存で落ちるため要素を直接復元）
+      if(typeof game!=="undefined" && game){ try{ endGameMode(); }catch(e){} }
+      paused=true; if(typeof updatePauseBtn==="function") updatePauseBtn(); clearTimeout(aiTimer); aiBusy=false;
+      game=null;
+      resetPlacements();
+      for(const h of data.board.hexes) board[h.id]={resource:h.resource, number:h.number};
+      ports={}; (data.ports||[]).forEach(p=>{ ports[p.edge]=p.type; });
+      for(const [p,d] of Object.entries(data.placements||{})){
+        if(!placements[p]) placements[p]={settlements:new Set(), roads:new Set(), cities:new Set()};
+        if(!placements[p].cities) placements[p].cities=new Set();
+        (d.settlements||[]).forEach(v=>placements[p].settlements.add(v));
+        (d.cities||[]).forEach(v=>placements[p].cities.add(v));
+        (d.roads||[]).forEach(e=>placements[p].roads.add(e));
+      }
+      winner = (data.winner!=null ? data.winner : null);
+      replay = {turns:data.replay, idx:0, active:true};   // engineのグローバルreplayに載せる
+      $("startScreen").classList.add("hidden");
+      document.body.classList.add("replaying");
+      $("replayBar").style.display="block";
+      $("exportBtn").disabled=false; $("replayBtn").disabled=false;
+      stopRvPlay(); updateRvButtons(); showReplayTurn();   // showReplayTurn内でrender()→盤面描画
+      if(uiMode==="mobile") setMobileTab("status");
+      toast(t("toast_loaded"));
+    }catch(e){ console.error("loadRecord",e); toast(t("toast_load_err")); }
+  };
+  rd.readAsText(f);
 }
 
 /* ============================================================
@@ -881,6 +922,9 @@ function wireControls(){
 
   $("pauseBtn").onclick=togglePause; $("evalBtn").onclick=toggleEval;
   $("newBtn").onclick=newMatch; $("replayBtn").onclick=startReplay; $("exportBtn").onclick=exportRecord;
+  { const _lb=$("loadBtn"); if(_lb) _lb.onclick=loadRecord;
+    const _slb=$("startLoadBtn"); if(_slb) _slb.onclick=loadRecord;
+    const _li=$("loadInput"); if(_li) _li.onchange=onLoadFile; }
   $("modeBtn").onclick=toggleMode; $("langBtn").onclick=toggleLang;
   { const _tb=$("tuneBtn"); if(_tb) _tb.onclick=toggleTune;
     const _bd=$("tuneBackdrop"); if(_bd) _bd.onclick=closeTune;
