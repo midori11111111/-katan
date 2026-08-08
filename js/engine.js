@@ -169,6 +169,8 @@ const BOUNDARY = new Set();
 let numPlayers = 4;
 let active = 1;
 let sim = null;                 // 初期配置シミュ: {order:[...], step, history:[{vid,p}]}
+let composerOn = false;         // 手動配置モード（game/sim無しでエディタ配置を使う）
+let composerOrder = [];         // 開拓地を置いた順（棋譜書き出し用）: [{p,vid},...]
 let game = null;                // 対局モード（厳密ルール）の状態
 
 // ===================== 対局モード：厳密ルールエンジン =====================
@@ -3430,12 +3432,15 @@ function clickVertex(vid){
   }
   if(tool==="port"){ toast("いまは港ツールです（配置に切り替えてください）"); return; }
   const owner=ownerOf("settlements",vid);
-  if(owner===active){ placements[active].settlements.delete(vid); render(); return; }
+  if(owner===active){ placements[active].settlements.delete(vid);
+    if(composerOn){ const i=composerOrder.findIndex(o=>o.vid===vid&&o.p===active); if(i>=0) composerOrder.splice(i,1); }
+    render(); if(composerOn && typeof updateComposerBar==="function") updateComposerBar(); return; }
   if(owner){ toast(`頂点 ${vid} はP${owner}が使用中`); return; }
   // 距離ルール：隣接頂点に誰かの開拓地があると置けない
   for(const n of GEO.vertex_neighbors[vid]) if(ownerOf("settlements",n)){ toast("隣に開拓地があるため置けません"); return; }
   placements[active].settlements.add(vid);
-  render();
+  if(composerOn) composerOrder.push({p:active, vid});
+  render(); if(composerOn && typeof updateComposerBar==="function") updateComposerBar();
 }
 
 function endSim(){ sim=null; const sb=document.getElementById("simBox"); if(sb) sb.style.display="none"; }

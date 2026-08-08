@@ -261,6 +261,16 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 /* リプレイ中はスマホの盤面を縮めて、盤面＋リプレイバーが両方収まるように */
 body[data-mode="mobile"].replaying svg#board{max-height:26vh; max-height:26dvh}
 body[data-mode="mobile"].replaying #replayBar{max-height:34vh}
+/* 手動配置モード */
+#composerBar{display:none; flex:0 0 auto; margin-top:8px; max-height:44vh; overflow:auto;
+  background:rgba(16,21,28,.95); border:1px solid var(--gold); border-radius:12px; padding:9px 11px; box-shadow:0 10px 30px rgba(0,0,0,.5)}
+#composerBar .rvtop{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+#composerBar .rvtop .spacer{flex:1}
+#composerBar .cpseg{display:inline-flex; gap:4px}
+#composerBar .cpp{padding:4px 9px; font-size:12px}
+#cpStat{margin-top:7px; font-size:12px; color:var(--muted)}
+body[data-mode="mobile"].composing svg#board{max-height:26vh; max-height:26dvh}
+body[data-mode="mobile"].composing #composerBar{max-height:42vh}
 /* 手札見出しの手番注記 */
 .handhead .ht .turnnote{color:var(--gold); font-weight:600; font-size:11px; margin-left:6px}
 

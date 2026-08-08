@@ -29,6 +29,7 @@
         <button id="replayBtn" class="btn" disabled data-i18n="replay_btn">棋譜確認</button>
         <button id="exportBtn" class="btn" disabled data-i18n="export_btn">棋譜書き出し</button>
         <button id="loadBtn" class="btn" data-i18n="load_btn">棋譜読込</button>
+        <button id="composerBtn" class="btn" data-i18n="composer_btn">手動で配置を作る</button>
         <button id="newBtn" class="btn ghost" data-i18n="new_btn">新規対局</button>
         <button id="modeBtn" class="btn ghost">PC表示</button>
         <button id="langBtn" class="btn ghost">English</button>
@@ -58,6 +59,23 @@
       </div>
       <div id="rvHands"></div>
       <div id="rvEvents"></div>
+    </div>
+    <div id="composerBar">
+      <div class="rvtop">
+        <b data-i18n="cp_title">手動配置</b>
+        <span class="cpseg">
+          <button class="segb cpp on" data-cp="1">P1</button>
+          <button class="segb cpp" data-cp="2">P2</button>
+          <button class="segb cpp" data-cp="3">P3</button>
+          <button class="segb cpp" data-cp="4">P4</button>
+        </span>
+        <div class="spacer"></div>
+        <button id="cpShuffle" class="btn sm" data-i18n="cp_shuffle">盤面シャッフル</button>
+        <button id="cpExport" class="btn sm" data-i18n="cp_export">棋譜書き出し</button>
+        <button id="cpExit" class="btn sm ghost" data-i18n="cp_exit">終了</button>
+      </div>
+      <div id="cpHint" class="hint" data-i18n="cp_hint">選んだプレイヤーで 頂点=開拓地 / 辺=道 を置く（もう一度クリックで削除）。相手の割り込みも自分で置ける。全席ぶん置いたら「棋譜書き出し」。</div>
+      <div id="cpStat"></div>
     </div>
   </div>
 
@@ -146,6 +164,7 @@
     <div class="startrow">
       <button id="shuffleBtn" class="btn" data-i18n="shuffle_btn">盤面シャッフル</button>
       <button id="startLoadBtn" class="btn" data-i18n="load_btn">棋譜読込</button>
+      <button id="startComposerBtn" class="btn" data-i18n="composer_btn">手動で配置を作る</button>
       <div class="spacer"></div>
       <button id="startBtn" class="btn primary" data-i18n="start_btn">対局開始</button>
     </div>
