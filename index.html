@@ -62,20 +62,33 @@
     </div>
     <div id="composerBar">
       <div class="rvtop">
-        <b data-i18n="cp_title">手動配置</b>
+        <b data-i18n="cp_title">盤面＆配置エディタ</b>
+        <div class="spacer"></div>
+        <button id="cpBlank" class="btn sm">空盤面</button>
+        <button id="cpShuffle" class="btn sm">ランダム盤面</button>
+        <button id="cpExport" class="btn sm" data-i18n="cp_export">棋譜書き出し</button>
+        <button id="cpExit" class="btn sm ghost" data-i18n="cp_exit">終了</button>
+      </div>
+      <div class="cpsec">
+        <div id="selHex" class="hint">タイルをクリック → 資源と数字を指定（同じボタンで解除）</div>
+        <div id="resPicker" class="pickrow"></div>
+        <div id="numPicker" class="pickrow"></div>
+        <div id="tileTally" class="hint"></div>
+      </div>
+      <div class="cpsec">
+        <div class="hint">港: 種類を選んで海岸線の辺をクリック（もう一度で削除）</div>
+        <div id="portPicker" class="pickrow"></div>
+      </div>
+      <div class="cpsec">
+        <div class="hint">配置(任意): プレイヤーを選んで 頂点=開拓地 / 辺=道</div>
         <span class="cpseg">
           <button class="segb cpp on" data-cp="1">P1</button>
           <button class="segb cpp" data-cp="2">P2</button>
           <button class="segb cpp" data-cp="3">P3</button>
           <button class="segb cpp" data-cp="4">P4</button>
         </span>
-        <div class="spacer"></div>
-        <button id="cpShuffle" class="btn sm" data-i18n="cp_shuffle">盤面シャッフル</button>
-        <button id="cpExport" class="btn sm" data-i18n="cp_export">棋譜書き出し</button>
-        <button id="cpExit" class="btn sm ghost" data-i18n="cp_exit">終了</button>
+        <div id="cpStat"></div>
       </div>
-      <div id="cpHint" class="hint" data-i18n="cp_hint">選んだプレイヤーで 頂点=開拓地 / 辺=道 を置く（もう一度クリックで削除）。相手の割り込みも自分で置ける。全席ぶん置いたら「棋譜書き出し」。</div>
-      <div id="cpStat"></div>
     </div>
   </div>
 

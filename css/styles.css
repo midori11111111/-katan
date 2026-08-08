@@ -269,6 +269,15 @@ body[data-mode="mobile"].replaying #replayBar{max-height:34vh}
 #composerBar .cpseg{display:inline-flex; gap:4px}
 #composerBar .cpp{padding:4px 9px; font-size:12px}
 #cpStat{margin-top:7px; font-size:12px; color:var(--muted)}
+#composerBar .cpsec{margin-top:8px; padding-top:8px; border-top:1px solid var(--line)}
+#composerBar .pickrow{display:flex; flex-wrap:wrap; gap:5px; margin-top:5px}
+.swatch{display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); background:var(--panel2); color:#e8eaed; border-radius:7px; padding:4px 8px; cursor:pointer; font-size:12px; font-weight:600}
+.swatch.on{border-color:var(--gold); box-shadow:0 0 0 1px var(--gold) inset}
+.swatch .sw{width:12px; height:12px; border-radius:3px; display:inline-block}
+.numbtn{min-width:28px; border:1px solid var(--line); background:var(--panel2); color:#e8eaed; border-radius:6px; padding:4px 7px; cursor:pointer; font-size:12px; font-weight:700}
+.numbtn.hot{color:#e0564b}
+.numbtn.on{border-color:var(--gold); box-shadow:0 0 0 1px var(--gold) inset}
+.numbtn:disabled{opacity:.4; cursor:default}
 body[data-mode="mobile"].composing svg#board{max-height:26vh; max-height:26dvh}
 body[data-mode="mobile"].composing #composerBar{max-height:42vh}
 /* 手札見出しの手番注記 */

@@ -19,9 +19,9 @@ const I18N = {
     brand_title:"カタン 挑戦者AI 対局", brand_sub:"あなた 対 AI3人",
     speed_label:"AI速度", eval_word:"AI評価値",
     replay_btn:"棋譜確認", export_btn:"棋譜書き出し", load_btn:"棋譜読込", new_btn:"新規対局", tune_btn:"⚙ AI調整",
-    composer_btn:"手動で配置を作る", cp_title:"手動配置", cp_shuffle:"盤面シャッフル", cp_export:"棋譜書き出し", cp_exit:"終了",
+    composer_btn:"盤面を自作する", cp_title:"盤面＆配置エディタ", cp_shuffle:"ランダム盤面", cp_export:"棋譜書き出し", cp_exit:"終了",
     cp_hint:"選んだプレイヤーで 頂点=開拓地 / 辺=道 を置く（もう一度クリックで削除）。相手の割り込みも自分で置ける。全席ぶん置いたら「棋譜書き出し」。",
-    toast_composed:"手動配置を棋譜に書き出しました", toast_composer_empty:"まだ開拓地が置かれていません",
+    toast_composed:"盤面/配置を棋譜に書き出しました", toast_composer_empty:"盤面も配置もまだ空です",
     pause_title:"一時停止", play_title:"再生",
     mode_pc:"PC表示", mode_mobile:"スマホ表示",
     setup_title:"対局の設定",
@@ -90,9 +90,9 @@ const I18N = {
     brand_title:"Catan Challenger AI", brand_sub:"You vs 3 AIs",
     speed_label:"AI speed", eval_word:"AI eval",
     replay_btn:"Replay", export_btn:"Export record", load_btn:"Load record", new_btn:"New game", tune_btn:"⚙ AI Tuning",
-    composer_btn:"Compose placement", cp_title:"Manual placement", cp_shuffle:"Shuffle board", cp_export:"Export record", cp_exit:"Exit",
+    composer_btn:"Build board", cp_title:"Board & placement editor", cp_shuffle:"Random board", cp_export:"Export record", cp_exit:"Exit",
     cp_hint:"With the selected player: click a vertex = settlement, an edge = road (click again to remove). You place every seat yourself. Export when done.",
-    toast_composed:"Composed placement exported to record", toast_composer_empty:"No settlements placed yet",
+    toast_composed:"Board/placement exported to record", toast_composer_empty:"Board and placement are both empty",
     pause_title:"Pause", play_title:"Play",
     mode_pc:"PC view", mode_mobile:"Mobile view",
     setup_title:"Game setup",
@@ -661,13 +661,15 @@ function startComposer(){
   game=null; sim=null; replay=null;
   if(!board || !Object.keys(board).length){ try{ randomBoard(); randomPorts(); }catch(e){} }
   resetPlacements();
-  composerOrder.length=0; composerOn=true; active=1; tool="place";
+  composerOrder.length=0; composerOn=true; active=1; tool="place"; selectedHex=null;
   $("startScreen").classList.add("hidden");
   document.body.classList.add("composing");
   $("replayBar").style.display="none";
   $("composerBar").style.display="block";
   $("exportBtn").disabled=false;
-  render(); setComposerPlayer(1); updateComposerBar();
+  render();
+  try{ buildTilePicker(); buildPortPicker(); updateTilePicker(); }catch(e){}
+  setComposerPlayer(1); updateComposerBar();
   if(uiMode==="mobile") setMobileTab("status");
 }
 function exitComposer(){
@@ -677,12 +679,18 @@ function exitComposer(){
   $("startScreen").classList.remove("hidden");
 }
 function setComposerPlayer(p){
-  active=p;
+  active=p; tool="place";   // 配置ツールへ（頂点=開拓地/辺=道）
   document.querySelectorAll("#composerBar .cpp").forEach(b=>b.classList.toggle("on", Number(b.dataset.cp)===p));
 }
 function composerShuffle(){
   try{ randomBoard(); randomPorts(); }catch(e){}
-  resetPlacements(); composerOrder.length=0; render(); updateComposerBar();
+  resetPlacements(); composerOrder.length=0; selectedHex=null;
+  render(); try{ updateTilePicker(); buildPortPicker(); }catch(e){} updateComposerBar();
+}
+function composerBlank(){
+  try{ blankBoard(); }catch(e){}
+  resetPlacements(); composerOrder.length=0; selectedHex=null;
+  render(); try{ updateTilePicker(); buildPortPicker(); }catch(e){} updateComposerBar();
 }
 function updateComposerBar(){
   const el=$("cpStat"); if(!el) return;
@@ -692,8 +700,9 @@ function updateComposerBar(){
   el.innerHTML=s;
 }
 function composerExport(){
-  const totalSett=[1,2,3,4].reduce((a,p)=>a+(placements[p]?placements[p].settlements.size:0),0);
-  if(!totalSett){ toast(t("toast_composer_empty")); return; }
+  const hasBoard=GEO.hexes.some(h=>board[h.id]&&board[h.id].resource);
+  const hasSett=[1,2,3,4].some(p=>placements[p]&&placements[p].settlements.size);
+  if(!hasBoard && !hasSett){ toast(t("toast_composer_empty")); return; }
   // 置いた順に setup ステップを生成（humanagree/bcloneが読める形＋リプレイ可能）
   const rep=[]; const settMap={}, roadMap={};
   for(const o of composerOrder){
@@ -702,8 +711,10 @@ function composerExport(){
       title:`手動配置 ${rep.length+1}　P${o.p} が開拓地`, hands:{}, events:[`P${o.p} が開拓地(v${o.vid})を置いた`]});
   }
   for(let p=1;p<=4;p++){ if(placements[p]&&placements[p].roads) for(const e of placements[p].roads) roadMap[e]=p; }
+  // 盤面のみでも読み込めるよう、必ず最終(盤面)ステップを1つ入れる
   rep.push({setup:true, sett:{...settMap}, city:{}, road:{...roadMap}, robber:0, dice:null, player:1,
-    title:"手動配置 完成", hands:{}, events:["配置完成（手動作成）"]});
+    title: composerOrder.length? "手動配置 完成" : "盤面（手動作成）", hands:{},
+    events:[ composerOrder.length? "配置完成（手動作成）" : "盤面を手動作成" ]});
   const rec={
     board:{ hexes: GEO.hexes.map(h=>({id:h.id,q:h.q,r:h.r,resource:board[h.id].resource,number:board[h.id].number})) },
     ports: Object.entries(ports).map(([e,ty])=>({edge:Number(e),type:ty})),
@@ -716,7 +727,7 @@ function composerExport(){
     winner:null, label:null, source:"manual-composed", roles4:true
   };
   const blob=new Blob([JSON.stringify(rec,null,2)],{type:"application/json"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="placement_composed.json";
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="board_composed.json";
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   toast(t("toast_composed"));
 }
@@ -1004,6 +1015,7 @@ function wireControls(){
     const _scb=$("startComposerBtn"); if(_scb) _scb.onclick=startComposer;
     const _cx=$("cpExit"); if(_cx) _cx.onclick=exitComposer;
     const _cs=$("cpShuffle"); if(_cs) _cs.onclick=composerShuffle;
+    const _cbl=$("cpBlank"); if(_cbl) _cbl.onclick=composerBlank;
     const _ce=$("cpExport"); if(_ce) _ce.onclick=composerExport;
     document.querySelectorAll("#composerBar .cpp").forEach(b=>{ b.onclick=()=>setComposerPlayer(Number(b.dataset.cp)); }); }
   $("modeBtn").onclick=toggleMode; $("langBtn").onclick=toggleLang;
