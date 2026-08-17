@@ -27,7 +27,7 @@ const I18N = {
     setup_title:"対局の設定",
     setup_lead:"各席のAIタイプを選んで対局。<br><b>挑戦者(関与なし)</b>=自己対戦だけで学習・人間データ不使用／<b>人間模倣</b>=強者棋譜由来の港評価・遅延盗賊・人間寄り配置ON／<b>現行AI</b>=従来の標準型。3種を並べて打たせ見比べられます。",
     your_seat:"あなたの席", you_operate:"あなた（この席を操作）",
-    strong_full:"最強AI（v2）", ai_strong:"最強AI", challenger_full:"人間模倣（強者データ由来）", cpure_full:"挑戦者(関与なし)", standard_full:"現行AI（学習モデル・標準）",
+    strong_full:"最強AI", ai_strong:"最強AI", invincible_full:"無敵AI（探索つき・重い）", ai_invincible:"無敵AI", challenger_full:"人間模倣（強者データ由来）", cpure_full:"挑戦者(関与なし)", standard_full:"現行AI（学習モデル・標準）",
     shuffle_btn:"盤面シャッフル", start_btn:"対局開始",
     start_lang:"言語", start_mode:"画面", lang_ja:"日本語", lang_en:"English",
     ai_challenger:"人間模倣", ai_cpure:"挑戦者(関与なし)", ai_standard:"現行AI", ai_you:"あなた",
@@ -98,7 +98,7 @@ const I18N = {
     setup_title:"Game setup",
     setup_lead:"Pick each seat's AI type, then start.<br><b>Challenger (raw)</b> = self-play only, no human data. <b>Human-imitation</b> = strong-player port valuation, delayed robber, human-like placement ON. <b>Current AI</b> = the previous default. Run all three side by side to compare.",
     your_seat:"Your seat", you_operate:"You (you play this seat)",
-    strong_full:"Strongest AI (v2)", ai_strong:"Strongest", challenger_full:"Human-imitation (from strong-player data)", cpure_full:"Challenger (no-human data)", standard_full:"Current AI (learning model)",
+    strong_full:"Strongest AI", ai_strong:"Strongest", invincible_full:"Invincible AI (with search, slow)", ai_invincible:"Invincible", challenger_full:"Human-imitation (from strong-player data)", cpure_full:"Challenger (no-human data)", standard_full:"Current AI (learning model)",
     shuffle_btn:"Shuffle board", start_btn:"Start game",
     start_lang:"Language", start_mode:"Display", lang_ja:"日本語", lang_en:"English",
     ai_challenger:"Human-imitation", ai_cpure:"Challenger (raw)", ai_standard:"Current AI", ai_you:"You",
@@ -164,7 +164,7 @@ function t(k, a){
   return (typeof v==="function") ? v(a||{}) : v;
 }
 function resName(r){ return t("res_"+r); }
-function seatAiName(p){ const x=seatAI[p]; return x==="strong"?t("ai_strong"):x==="challenger"?t("ai_challenger"):x==="cpure"?t("ai_cpure"):x==="puremodel"?t("ai_standard"):t("ai_you"); }
+function seatAiName(p){ const x=seatAI[p]; return x==="invincible"?t("ai_invincible"):x==="strong"?t("ai_strong"):x==="challenger"?t("ai_challenger"):x==="cpure"?t("ai_cpure"):x==="puremodel"?t("ai_standard"):t("ai_you"); }
 
 // 日本語ログ/トースト文字列を英語に（エンジンが生成する文言用のベストエフォート変換）
 function _devEn(c){ return String(c).replace(/騎士/g,"Knight").replace(/勝利点/g,"VP").replace(/街道建設/g,"Road building").replace(/収穫/g,"Year of plenty").replace(/独占/g,"Monopoly"); }
@@ -275,6 +275,18 @@ function scheduleAI(base){ if(paused) return; clearTimeout(aiTimer); aiTimer=set
 //  cpure=挑戦者(関与なし): 人間由来を全OFF＋自己対戦蒸留で配置（人間データ不使用）
 //  challenger=人間模倣: 全ON＋computeBest+港シナジーで配置（強者データ由来）
 //  puremodel=現行AI: 全OFF＋computeBest(港なし)で配置（従来のベースライン）
+// 無敵AI席は本編をロールアウト探索で打つ（それ以外は従来どおり標準の建設ロジック）
+function _aiPlayMain(p){
+  try{
+    if(typeof ROLLOUT_SEATS!=="undefined" && ROLLOUT_SEATS && ROLLOUT_SEATS.has(p)
+       && typeof challengerMainRollout==="function"){
+      challengerMainRollout(p);
+      if(game.phase==="main") _botMain(p);   // 探索が打ち切った後の建て残し・交換は標準で回収
+      return;
+    }
+  }catch(e){}
+  _botMain(p);
+}
 function _applyVariant(seat){
   const k = (seat!=null && typeof seatAI!=="undefined") ? seatAI[seat] : null;
   const human = (k==="challenger" || k==="strong");   // 人間模倣・最強AIが人間由来の挙動をONにする
@@ -282,13 +294,22 @@ function _applyVariant(seat){
   //  ETA(あと何ダイスで10点) / 希少資源の独占 / 相手配置の先読み。研究側の実測で標準AIに +10.0pt。
   //  重みは小さい値が正解（大きくすると悪化する）。他の席・他モードには一切影響しない。
   try{
-    if(k==="strong"){
+    const isStrong = (k==="strong" || k==="invincible");
+    if(isStrong){
       const one=new Set([seat]);
+      // 配置3項（ETA / 島の希少資源の独占 / 相手配置の先読み）
       ETA_W=0.02;   ETA_SEATS=one;
       SCARCE_W=15;  SCARCE_SEATS=one;
       LOOK_W=0.01;  LOOK_SEATS=one;
+      // 道賞の確定取り
+      ROAD_WIN_SEATS=one;
+      // 手札圧縮: 8枚から。ただし次の自分の番までに都市が50%以上で建つ見込みならステイ
+      TURN_CFG={}; TURN_CFG[seat]={dbt:7, cmp:7, holdP:0.5};
+      // 無敵AIだけ本編をロールアウト探索で打つ
+      ROLLOUT_SEATS = (k==="invincible") ? one : null;
     }else{
       ETA_W=0; ETA_SEATS=null; SCARCE_W=0; SCARCE_SEATS=null; LOOK_W=0; LOOK_SEATS=null;
+      ROAD_WIN_SEATS=null; TURN_CFG=null; ROLLOUT_SEATS=null;
     }
   }catch(e){}
   try{ PORT_SYNERGY = human; }catch(e){}    // 港シナジー（配置スコア）
@@ -335,17 +356,29 @@ function aiStep(){
   if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); refresh(); scheduleAI(550); return; }
   if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); refresh(); scheduleAI(450); return; }
   if(game.phase==="main"){
+    // 無敵AIは探索で数秒かかる。先に「考え中」を描画してから、次のフレームで計算に入る（画面が固まる前に表示する）
+    if(typeof ROLLOUT_SEATS!=="undefined" && ROLLOUT_SEATS && ROLLOUT_SEATS.has(p)){
+      const st=document.getElementById("gameStatus");
+      if(st) st.innerHTML=`<b style="color:${PCOLORS[p-1]}">P${p}</b> ${LANG==="en"?"is searching…":"が先読み中…"}（${t("ai_invincible")}）`;
+      clearTimeout(aiTimer);
+      aiTimer=setTimeout(()=>{
+        if(paused){ aiBusy=false; return; }
+        _aiPlayMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame();
+        refresh(); scheduleAI(200);
+      }, 30);
+      return;
+    }
     if(evalOn){
       // AIの手番でも評価値を見せる: まず現在のAIの評価を描画し、速度ぶん待ってから打つ
       refresh();
       clearTimeout(aiTimer);
       aiTimer=setTimeout(()=>{
         if(paused){ aiBusy=false; return; }
-        _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame();
+        _aiPlayMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame();
         refresh(); scheduleAI(200);
       }, aiDelay(650));
     } else {
-      _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); refresh(); scheduleAI(650);
+      _aiPlayMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); refresh(); scheduleAI(650);
     }
     return;
   }
@@ -876,7 +909,7 @@ function buildStartScreen(){
   const subEl=document.querySelector(".sublabel[data-i18n='your_seat']");
   if(subEl) subEl.textContent = (LANG==="en"?"Who plays each seat (hot-seat OK)":"各席の担当（人間を複数席OK）");
   $("seatPick").innerHTML="";
-  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["strong",t("strong_full")],["cpure",t("cpure_full")],["challenger",t("challenger_full")],["puremodel",t("standard_full")]];
+  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["strong",t("strong_full")],["invincible",t("invincible_full")]];
   const grid=$("seatGrid"); grid.innerHTML="";
   for(let s=1;s<=4;s++){
     const row=document.createElement("div"); row.className="seatrow";

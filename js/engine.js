@@ -328,8 +328,9 @@ function glog(msg){
    EVAL_LOG=false で無効（ログは従来どおり）。
    ============================================================ */
 let EVAL_LOG = true;
+let _inPlayout = false;   // 探索プレイアウト中は評価ログを止める（内部の建設ごとにcomputeAdviceが走ると致命的に遅い）
 function _evalTag(kind, targetId){
-  if(!EVAL_LOG) return "";
+  if(!EVAL_LOG || _inPlayout) return "";
   try{
     if(!game || game.phase!=="main") return "";
     const adv = computeAdvice();
@@ -1074,7 +1075,401 @@ function _botDiscard(){ // 捨て: 次の建設の予約分を守り、余剰か
   game.discardQueue.shift();
   if(!game.discardQueue.length) game.phase="robber";
 }
+/* ===== [2026-08-18] ユーザー指定ルール: 道賞の確定取り／手札圧縮の作り直し ===== */
+let ROAD_WIN=false, ROAD_WIN_SEATS=null;
+let CITY_HOLD_ROLLS=4;
+let TURN_CFG=null;
+function _dbtOf(p){   return (TURN_CFG&&TURN_CFG[p]&&TURN_CFG[p].dbt  !=null)?TURN_CFG[p].dbt  :DEV_BUY_THRESH; }
+function _cmpOf(p){   return (TURN_CFG&&TURN_CFG[p]&&TURN_CFG[p].cmp  !=null)?TURN_CFG[p].cmp  :COMPRESS_THRESH; }
+function _holdPOf(p){ return (TURN_CFG&&TURN_CFG[p]&&TURN_CFG[p].holdP!=null)?TURN_CFG[p].holdP:0; }
+function _pCityByNextTurn(p){
+  try{
+    if(!(placements[p].settlements.size>0 && (placements[p].cities?placements[p].cities.size:0)<4)) return 0;
+    const h=game.hands[p];
+    const needW=Math.max(0, COST.city.wheat-(h.wheat||0)), needO=Math.max(0, COST.city.ore-(h.ore||0));
+    if(needW===0 && needO===0) return 1;
+    // 出目ごとの自分の麦・鉄の入手量
+    const gain={};
+    for(let d=2; d<=12; d++) gain[d]={w:0,o:0};
+    for(const hx of GEO.hexes){
+      const b=board[hx.id];
+      if(!b||!b.number||!b.resource||b.resource==="desert") continue;
+      if(hx.id===game.robber) continue;
+      if(b.resource!=="wheat" && b.resource!=="ore") continue;
+      for(const v of hexVertsG(hx.id)){
+        const oc=occupantOf(v);
+        if(!oc||oc.p!==p) continue;
+        const mult=(oc.type==="city")?2:1;
+        if(b.resource==="wheat") gain[b.number].w+=mult; else gain[b.number].o+=mult;
+      }
+    }
+    const W=[[2,1],[3,2],[4,3],[5,4],[6,5],[7,0],[8,5],[9,4],[10,3],[11,2],[12,1]];   // 7は産出なし
+    // 状態: [残り必要麦][残り必要鉄] の確率
+    let cur=[]; for(let a=0;a<=needW;a++){ cur.push(new Array(needO+1).fill(0)); }
+    cur[needW][needO]=1;
+    for(let r=0;r<CITY_HOLD_ROLLS;r++){
+      const nxt=[]; for(let a=0;a<=needW;a++) nxt.push(new Array(needO+1).fill(0));
+      for(let a=0;a<=needW;a++) for(let b2=0;b2<=needO;b2++){
+        const pr=cur[a][b2]; if(pr<=0) continue;
+        if(a===0&&b2===0){ nxt[0][0]+=pr; continue; }             // 既に到達＝吸収状態
+        for(const [d,wt] of W){
+          const na=Math.max(0, a-gain[d].w), nb=Math.max(0, b2-gain[d].o);
+          nxt[na][nb]+= pr*(wt/36);
+        }
+      }
+      cur=nxt;
+    }
+    return cur[0][0];
+  }catch(e){ return 0; }
+}
+function _rwLegalEdges(p){
+  const out=[];
+  for(const e of GEO.edges){
+    if(ownerOf("roads",e.id)) continue;
+    const connects=[e.a,e.b].some(v=>{
+      const oc=occupantOf(v);
+      if(oc && oc.p===p) return true;
+      if(oc && oc.p!==p) return false;
+      return GEO.edges.some(e2=>e2.id!==e.id&&(e2.a===v||e2.b===v)&&placements[p].roads.has(e2.id));
+    });
+    if(connects) out.push(e.id);
+  }
+  return out;
+}
+function _rwBestExtension(p, k, target){
+  if(k<=0) return null;
+  const base=longestRoadOf(p);
+  if(base>=target) return {edges:[], len:base};
+  const cands=_rwLegalEdges(p);
+  if(!cands.length) return null;
+  let best=null;
+  const roads=placements[p].roads;
+  const rec=(depth, startIdx, chosen)=>{
+    if(best) return;                       // 最小本数で見つけ次第終了
+    if(depth>0){
+      const len=longestRoadOf(p);
+      if(len>=target){ best={edges:chosen.slice(), len}; return; }
+    }
+    if(depth>=k) return;
+    for(let i=startIdx;i<cands.length;i++){
+      const eid=cands[i];
+      if(roads.has(eid)) continue;
+      roads.add(eid); chosen.push(eid);
+      // 新たに繋がったエッジも候補に入るが、探索を抑えるため既存候補のみで進める
+      rec(depth+1, i+1, chosen);
+      chosen.pop(); roads.delete(eid);
+      if(best) return;
+    }
+  };
+  for(let kk=1;kk<=k && !best;kk++){ const _k=kk; const rec2=(d,si,ch)=>{
+      if(best) return;
+      if(d===_k){ const len=longestRoadOf(p); if(len>=target) best={edges:ch.slice(), len}; return; }
+      for(let i=si;i<cands.length;i++){ const eid=cands[i]; if(roads.has(eid)) continue;
+        roads.add(eid); ch.push(eid); rec2(d+1,i+1,ch); ch.pop(); roads.delete(eid); if(best) return; } };
+    rec2(0,0,[]); }
+  return best;
+}
+function _rwAffordableRoads(p){
+  let n = game.freeRoads||0;
+  let playRoadsCard = false;
+  try{ if(!game.devPlayed && typeof canPlay==="function" && canPlay("roads")){ n+=2; playRoadsCard=true; } }catch(e){}
+  const h=game.hands[p];
+  n += Math.min(h.wood, h.brick);
+  // 4:1/港交易で追加で作れる分（安全側に1本まで）
+  try{ if(_canCompleteByTrade(p, COST.road)) n += 1; }catch(e){}
+  const cap = 15 - placements[p].roads.size;
+  return {n: Math.max(0, Math.min(n, cap)), playRoadsCard};
+}
+function _rwOppCanExceed(p, myNewLen){
+  for(let q=1;q<=numPlayers;q++){
+    if(q===p) continue;
+    if(placements[q].roads.size>=15) continue;
+    const h=game.hands[q];
+    let k=Math.min(h.wood, h.brick);
+    try{ if(!game.dev.hands[q] || game.dev.hands[q].roads>0) k+=2; }catch(e){}
+    if(k<=0) continue;
+    const saveRoads=new Set(placements[q].roads);
+    const r=_rwBestExtension(q, Math.min(k,3), myNewLen+1);
+    placements[q].roads=saveRoads;
+    if(r) return true;
+  }
+  return false;
+}
+function _rwP2VPNextTurn(p){
+  const canUpgrade = placements[p].settlements.size>0 && (placements[p].cities?placements[p].cities.size:0)<4;
+  const canSettle  = placements[p].settlements.size + (placements[p].cities?placements[p].cities.size:0) < 7;
+  if(!canUpgrade && !canSettle) return 0;
+  const base=Object.assign({}, game.hands[p]);
+  const pr=production(p);   // 1ダイスあたりの期待産出（出目別に分解できないので近似に使う）
+  const DICE=[[2,1],[3,2],[4,3],[5,4],[6,5],[7,6],[8,5],[9,4],[10,3],[11,2],[12,1]];
+  // 出目ごとの実収入を数える
+  let ok=0, tot=0;
+  for(const [d,w] of DICE){
+    tot+=w;
+    if(d===7) continue;                      // 7は産出なし
+    const h=Object.assign({}, base);
+    for(const hx of GEO.hexes){
+      const b=board[hx.id];
+      if(!b||b.number!==d||!b.resource||b.resource==="desert") continue;
+      if(hx.id===game.robber) continue;
+      for(const v of hexVertsG(hx.id)){
+        const oc=occupantOf(v);
+        if(oc&&oc.p===p) h[b.resource]+=(oc.type==="city")?2:1;
+      }
+    }
+    // 2点ぶん（都市2 / 都市+開拓地 / 開拓地2）を賄えるか
+    const pay=(hh,c,times)=>{ for(let i=0;i<times;i++){ for(const r in c){ if(hh[r]<c[r]) return false; } for(const r in c) hh[r]-=c[r]; } return true; };
+    let good=false;
+    if(canUpgrade){ const h2=Object.assign({},h); if((placements[p].cities?placements[p].cities.size:0)<=2 && pay(h2,COST.city,2)) good=true; }
+    if(!good && canUpgrade && canSettle){ const h2=Object.assign({},h); if(pay(h2,COST.city,1)&&pay(h2,COST.settlement,1)) good=true; }
+    if(!good && canSettle){ const h2=Object.assign({},h); if(pay(h2,COST.settlement,2)) good=true; }
+    if(good) ok+=w;
+  }
+  return tot? ok/tot : 0;
+}
+function _roadWinRule(p){
+  if(_inPlayout) return false;   // 探索プレイアウト内では走らせない（道の組合せ探索＋最長路DFSが重すぎる）
+  if(!(ROAD_WIN_SEATS ? ROAD_WIN_SEATS.has(p) : ROAD_WIN)) return false;
+  if(placements[p].roads.size>=15) return false;
+  if(game.lr.holder===p) return false;                 // 既に保持
+  const holder=game.lr.holder;
+  const target = holder ? (game.lr.len+1) : 5;         // 並ぶだけでは奪えない＝厳密に上回る
+  const aff=_rwAffordableRoads(p);
+  if(aff.n<=0) return false;
+  const plan=_rwBestExtension(p, Math.min(aff.n,4), target);
+  if(!plan || !plan.edges.length) return false;
+  const vpAfter = vpOf(p) + 2;
+  let go=false;
+  if(vpAfter>=10) go=true;                             // (2) 10点に到達するなら必ず
+  else if(vpAfter===8 || vpAfter===9){                 // (3) 8点/9点なら条件つきで必ず
+    if(!_rwOppCanExceed(p, plan.len) && _rwP2VPNextTurn(p)>=0.25) go=true;
+  }
+  if(!go) return false;
+  // 実行: 街道建設カードがあれば先に使う（無料2本）
+  if(aff.playRoadsCard && !game.devPlayed){ try{ playDev("roads"); }catch(e){} }
+  let built=0;
+  for(const eid of plan.edges){
+    if(ownerOf("roads",eid)) continue;
+    if(!(game.freeRoads>0) && !canPay(p,COST.road)){
+      try{ _tradeToward(p,COST.road); }catch(e){}
+      if(!canPay(p,COST.road)) break;
+    }
+    try{ gameClickEdge(eid); built++; }catch(e){ break; }
+    if(game.phase!=="main") break;                     // 勝利で終局
+  }
+  return built>0;
+}
+
+/* ===== [2026-08-18 無敵AI] 研究側 zoo.js から移植したロールアウト探索一式 =====
+   人間棋譜11試合で学習した価値関数 V_human(23特徴, AUC 0.93) を葉に使い、
+   各決定を M=24 の打ち切りプレイアウトで評価する。標準AIを'置換'せず'上書き'する構造
+   （stdrest候補＋マージン）＝標準が明確に劣る時だけ探索手を採用する。
+   研究側実測: 配置3項の上に +4pt（標準AIに +10.0pt → +14.0pt）。 ===== */
+const VALUE_W_HUMAN = [-3.502760812501638, 0.29534758818479895, -0.6393882204524826, 0.057823297914609356, 0.4314983233533723, 0.1274437282814457, 0.17788169533619397, -0.04037374451142822, 0.2561029269458832, 0.5855111533194708, -0.6037131026419419, 0.20157421019135824, 0.049672136741915285, 0, -0.22646622808936198, -0.1855956520730821, -0.34234031834017925, 0, 1.9570317030340754, -0.09886541805936676, 0.15710282085281033, 0.016269328745739456, -2.7735221284258924, 2.4049505026449913];
+function _valScore(feat){ let z=VALUE_W_HUMAN[0]; const n=Math.min(feat.length, VALUE_W_HUMAN.length-1);
+  for(let i=0;i<n;i++) z+=VALUE_W_HUMAN[i+1]*feat[i];
+  if(z>30) return 1; if(z<-30) return 0; return 1/(1+Math.exp(-z)); }
+const _origRandom = Math.random;
+let _rngOn = false, _rngState = 12345;
+let _roStats = {stdrest:0, endturn:0, city:0, tradecity:0, settle:0, tradesettle:0, road:0, dev:0, searched:0, delegated:0};
+// ブラウザ実測: M=24/打ち切り30 は1手番17秒で実用外。M=8/打ち切り15 に落とす（node側で強さを検証）
+let CH_ROLLOUT_MAIN=false, CH_ROLLOUT_M=8, CH_ROLLOUT_TRUNC=15, CH_ROLLOUT_MINOPT=1, CH_ROLLOUT_MARGIN=0.08, CH_ROLLOUT_CRN=1;
+let ROLLOUT_SEATS=null;   // この席だけ探索する（無敵AI）
+function _baseBotMain(p){ return _botMain(p); }
+function _prodNumbers(pl){
+  const m={};
+  for(const kind of ["settlements","cities"]){ const set=placements[pl]&&placements[pl][kind]; if(!set) continue;
+    const mult=kind==="cities"?2:1;
+    for(const vid of set) for(const hid of (GEO.vertex_hexes[String(vid)]||[])){ const b=board[hid];
+      if(b&&b.number&&b.resource&&b.resource!=="desert") m[b.number]=(m[b.number]||0)+pipOf(b.number)*mult; }
+  }
+  return m;
+}
+function _rivalNonOverlap(me,q){
+  if(process.env.HA_NORIVAL) return 1;   // アブレーション: H11(出目重なり)を切る
+  const mm=_prodNumbers(me), qm=_prodNumbers(q);
+  let nonOv=0, tot=0;
+  for(const n in qm){ tot+=qm[n]; if(!mm[n]) nonOv+=qm[n]; }
+  if(tot<=0) return 1;
+  return 1 + 0.5*(nonOv/tot);   // 非重複が多い相手＝真のライバル（最大1.5倍）
+}
+function _prodPips(p){
+  const pr = production(p);
+  return { tot:(pr.wood+pr.brick+pr.sheep+pr.wheat+pr.ore)*36,
+           ow:(pr.ore+pr.wheat)*36, wb:(pr.wood+pr.brick)*36, sh:pr.sheep*36 };
+}
+function _portCount(p){
+  try {
+    const pv = _portVerts();                       // 港に接する頂点のSet
+    let c = 0;
+    for (const v of placements[p].settlements) if (pv.has(v)) c++;
+    for (const v of (placements[p].cities||[])) if (pv.has(v)) c++;
+    return c;
+  } catch(e){ return (typeof _hasPort==="function" && _hasPort(p)) ? 1 : 0; }
+}
+function _nextBuildCostH9(q){
+  const nc=(placements[q].cities?placements[q].cities.size:0), ns=placements[q].settlements.size;
+  const cands=[];
+  if(ns>0 && nc<4) cands.push(COST.city);
+  if(ns+nc<7) cands.push(COST.settlement);
+  cands.push(COST.dev);
+  let best=cands[0], bt=Infinity;
+  for(const c of cands){ const t=turnsToAfford(q,c); if(t<bt){ bt=t; best=c; } }
+  return {cost:best, turns:bt};
+}
+function stateFeat(p){
+  const pl = placements[p];
+  const c = pl.cities ? pl.cities.size : 0, s = pl.settlements.size;
+  const bvp = s + 2*c;
+  const pp = _prodPips(p);
+  const vp = vpOf(p);
+  const port = _portCount(p);
+  const army = (game.army && game.army[p]) || 0;
+  let lr = 0; try { lr = longestRoadOf(p); } catch(e){}
+  const hand = RES5.reduce((a,r)=>a+game.hands[p][r], 0);
+  const dev = (game.dev && game.dev.hands && game.dev.hands[p])
+              ? Object.values(game.dev.hands[p]).reduce((a,b)=>a+b,0) : 0;
+  let oppVP=0, oppProd=0;
+  for (let q=1;q<=numPlayers;q++){ if(q===p) continue;
+    oppVP=Math.max(oppVP, vpOf(q)); oppProd=Math.max(oppProd, _prodPips(q).tot); }
+  const rc = game.rollCount || 0;
+  // ==== [解説由来の追加特徴] 強い人間が実際に計算している量 ====
+  const prod = production(p);
+  const owMin = Math.min(prod.ore||0, prod.wheat||0);                     // 鉄麦バランス（都市化力・解説が最重視）
+  let myTurns=20; try{ const t=_nextBuildCostH9(p).turns; if(isFinite(t)) myTurns=Math.min(20,t); }catch(e){}  // 自分の次建設の近さ（"4ダイス単位"）
+  let oppMinTurns=20, rivalNO=0;
+  for(let q=1;q<=numPlayers;q++){ if(q===p) continue;
+    try{ const t=_nextBuildCostH9(q).turns; if(isFinite(t)) oppMinTurns=Math.min(oppMinTurns,t); }catch(e){}   // 相手の最速建設の近さ（盗賊の的）
+    try{ const rn=_rivalNonOverlap(p,q)*(_prodPips(q).tot||0); if(rn>rivalNO) rivalNO=rn; }catch(e){}           // H11 出目非重複＝真のライバル
+  }
+  let portSyn=0;   // 港シナジー: 自分が触れる資源港×その資源の産出（"生かせる港"だけ価値・解説）
+  try{ for(const eid in ports){ const t=ports[eid]; if(t==='3:1') continue; const e=GEO.edges[+eid]; if(!e) continue;
+    if([e.a,e.b].some(v=>{const oc=occupantOf(v); return oc&&oc.p===p;}) && prod[t]!=null) portSyn+=prod[t]; } }catch(e){}
+  let robbedOW=0;  // 盗賊が自分の鉄/麦を止めているか（エンジン停止）
+  try{ const rb=board[game.robber]; if(rb&&(rb.resource==='ore'||rb.resource==='wheat')&&hexVertsG(game.robber).some(v=>{const oc=occupantOf(v); return oc&&oc.p===p;})) robbedOW=1; }catch(e){}
+  return [bvp, vp, c, s, pp.tot, pp.ow, pp.wb, pp.sh, port, army, lr, hand, dev, oppVP, oppProd, vp-oppVP, rc,
+          owMin, myTurns, oppMinTurns, rivalNO, portSyn, robbedOW];
+}
+function _mainBuildCands(p){
+  const cands=[]; const adv=computeAdvice();
+  const ci=adv.find(a=>a.label.startsWith("都市化")&&a.target&&a.target.id!=null);
+  if(ci && placements[p].cities.size<4){ if(canPay(p,COST.city)) cands.push({kind:'city',v:ci.target.id}); else if(_canCompleteByTrade(p,COST.city)) cands.push({kind:'tradecity',v:ci.target.id}); }
+  const si=adv.find(a=>a.label.startsWith("開拓地")&&a.target&&a.target.id!=null);
+  if(si && placements[p].settlements.size<5){ if(canPay(p,COST.settlement)) cands.push({kind:'settle',v:si.target.id}); else if(_canCompleteByTrade(p,COST.settlement)) cands.push({kind:'tradesettle',v:si.target.id}); }
+  const ri=adv.find(a=>a.label.startsWith("道")&&a.target&&a.target.id!=null);
+  if(ri && (canPay(p,COST.road)||game.freeRoads>0) && placements[p].roads.size<15) cands.push({kind:'road',e:ri.target.id});
+  if(game.dev.deck.length && canPay(p,COST.dev)) cands.push({kind:'dev'});
+  return cands;
+}
+function _applyCandVal(p, a){
+  // 実行できたら true。エンジンのプリミティブ（_botMainと同じgameClick経路）を使う。
+  if (a.kind === 'city')       { if (canPay(p, COST.city)) { gameClickVertex(a.v); return true; } return false; }
+  if (a.kind === 'tradecity')  { _tradeToward(p, COST.city); if (canPay(p, COST.city)) { gameClickVertex(a.v); return true; } return false; }
+  if (a.kind === 'settle')     { if (canPay(p, COST.settlement)) { gameClickVertex(a.v); return true; } return false; }
+  if (a.kind === 'tradesettle'){ _tradeToward(p, COST.settlement); if (canPay(p, COST.settlement)) { gameClickVertex(a.v); return true; } return false; }
+  if (a.kind === 'road')       { if (canPay(p, COST.road) || game.freeRoads > 0) { gameClickEdge(a.e); return true; } return false; }
+  if (a.kind === 'dev')        { if (game.dev.deck.length && canPay(p, COST.dev)) { buyDev(); return true; } return false; }
+  return false;
+}
+function _playoutTruncV(p, K){
+  const _bs=USE_BACKSOLVE, _fp=(typeof FAST_PLAYOUT!=="undefined"?FAST_PLAYOUT:false);
+  const _cro=CH_ROLLOUT_MAIN;
+  USE_BACKSOLVE=false; FAST_PLAYOUT=true; CH_ROLLOUT_MAIN=false;
+  let rolls=0, iters=0;
+  try {
+    while(game.phase!=="over" && rolls<K){
+      const q=cur();
+      if(game.phase==="roll"){ if(_shouldPlayKnight(q)) playDev("knight"); if(game.phase==="roll"){ doRoll(null); rolls++; } }
+      if(game.phase==="discard"){ while(game.discardQueue.length) _botDiscard(); }
+      if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); }
+      if(game.phase==="steal"){ stealFrom(game.stealCands[0]); }
+      if(game.phase==="main"){ _botMain(q); _cleanupTurn(q); if(game.phase==="main") endTurnGame(); }
+      if(game.phase==="over") break;
+      if(++iters>2000) break;
+    }
+  } catch(e){}
+  const v = (game.phase==="over") ? (cur()===p?1:0) : _valScore(stateFeat(p));
+  USE_BACKSOLVE=_bs; FAST_PLAYOUT=_fp; CH_ROLLOUT_MAIN=_cro;
+  return v;
+}
+function _playoutToEnd(){
+  const _bs=USE_BACKSOLVE, _fp=(typeof FAST_PLAYOUT!=="undefined"?FAST_PLAYOUT:false);
+  const _cvm=CH_VALUE_MAIN,_cmm=CH_META_MAIN,_csm=CH_SEARCH_MAIN,_crm=CH_RACE_MAIN,_cro=CH_ROLLOUT_MAIN;
+  USE_BACKSOLVE=false; FAST_PLAYOUT=true;
+  ROLES={1:"standard",2:"standard",3:"standard",4:"standard"};
+  CH_VALUE_MAIN=false; CH_META_MAIN=false; CH_SEARCH_MAIN=false; CH_RACE_MAIN=false; CH_ROLLOUT_MAIN=false;
+  let rolls=0, iters=0;
+  try {
+    while(game.phase!=="over" && rolls<400){
+      const q=cur();
+      if(game.phase==="roll"){ if(_shouldPlayKnight(q)) playDev("knight"); if(game.phase==="roll"){ doRoll(null); rolls++; } }
+      if(game.phase==="discard"){ while(game.discardQueue.length) _botDiscard(); }
+      if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); }
+      if(game.phase==="steal"){ stealFrom(game.stealCands[0]); }
+      if(game.phase==="main"){ _botMain(q); _cleanupTurn(q); if(game.phase==="main") endTurnGame(); }
+      if(game.phase==="over") break;
+      if(++iters>3000) break;
+    }
+  } catch(e){}
+  let winner=1,bv=-1; for(let q=1;q<=numPlayers;q++){ const v=vpOf(q); if(v>bv){bv=v;winner=q;} }
+  USE_BACKSOLVE=_bs; FAST_PLAYOUT=_fp;
+  CH_VALUE_MAIN=_cvm; CH_META_MAIN=_cmm; CH_SEARCH_MAIN=_csm; CH_RACE_MAIN=_crm; CH_ROLLOUT_MAIN=_cro;
+  return winner;
+}
+function _rolloutEvalOnce(p, forced){
+  if(forced==='endturn'){ if(game.phase==="main") endTurnGame(); }
+  else if(forced==='stdrest'){ if(game.phase==="main") _baseBotMain(p); }   // 標準がこのターンの残りを打つ
+  else if(forced){ _applyCandVal(p, forced); }                              // この手を打つ→残りは(プレイアウト内で)標準
+  if(CH_ROLLOUT_TRUNC>0) return _playoutTruncV(p, CH_ROLLOUT_TRUNC);
+  return _playoutToEnd()===p ? 1 : 0;
+}
+function _rolloutPick(p, cands){
+  const _ip=_inPlayout; _inPlayout=true;
+  try{ return _rolloutPickInner(p, cands); } finally { _inPlayout=_ip; }
+}
+function _rolloutPickInner(p, cands){
+  const snap0=snapshotState();
+  const seeds=[]; for(let m=0;m<CH_ROLLOUT_M;m++) seeds.push((_origRandom()*2147483647)|0);
+  let best=null, bw=-1;
+  for(const c of cands){
+    let s=0;
+    for(let m=0;m<CH_ROLLOUT_M;m++){
+      restoreState(snap0);
+      if(CH_ROLLOUT_CRN){ _rngState=seeds[m]; _rngOn=true; }
+      s+=_rolloutEvalOnce(p,c.forced);
+      _rngOn=false;
+    }
+    const wr=s/CH_ROLLOUT_M;
+    const eff = (c.tag==='stdrest') ? wr + CH_ROLLOUT_MARGIN : wr;   // 標準委譲に下限マージン
+    if(eff>bw){ bw=eff; best=c; }
+  }
+  restoreState(snap0);
+  return best;
+}
+function challengerMainRollout(p){
+  let guard=0;
+  while(game.phase==="main" && guard++<10){
+    const builds=_mainBuildCands(p);
+    if(builds.length < CH_ROLLOUT_MINOPT){          // 探索する実質の選択肢が無い
+      _roStats.delegated++;
+      _baseBotMain(p);                              // 残りは標準に委ねる（建て残し・交換を回収）
+      return;
+    }
+    _roStats.searched++;
+    const cands=[{tag:'stdrest',forced:'stdrest'},{tag:'endturn',forced:'endturn'}];
+    for(const b of builds) cands.push({tag:b.kind,forced:b});
+    const best=_rolloutPick(p, cands);
+    _roStats[best.tag]=(_roStats[best.tag]||0)+1;
+    if(best.tag==='stdrest'){ if(game.phase==="main") _baseBotMain(p); return; }  // 残りは標準に委ねて終了
+    if(best.tag==='endturn'){ return; }                                          // ここで建設をやめる
+    if(!_applyCandVal(p, best.forced)) { _baseBotMain(p); return; }              // この手を打って次の手を探索
+    if(game.phase!=="main") return;
+  }
+}
+
 function _botMain(p){ // 建設フェーズ: 提案リストに従って行動（最大12手）
+  // [ユーザー指定] 毎ターン一番最初に「道賞を取り切れるか」を検証する
+  try{ if(_roadWinRule(p)){ if(game.phase!=="main") return; } }catch(e){}
   // 鉄温存（ユーザーのプレイング移植）: 最初の都市がまだ無い偏った鉄配置では、
   // 鉄を都市化のためだけに残し、カード等に流さない。「上振れが来た時に鉄が手元にある」状態を保つ。
   // 自動発動: 都市0個 & 開拓地あり & 鉄の生産期待値が低い(=上振れ待ちが正解の配置)時だけON。
@@ -1332,7 +1727,8 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
         }
       }
       // バースト回避1: 溢れそうならカードを買って圧縮。ただし都市化に必要な鉄麦は死守する。
-      if(AGGRO_TRADE && handTotal(p)>DEV_BUY_THRESH && game.dev.deck.length){
+      if(AGGRO_TRADE && handTotal(p)>_dbtOf(p) && game.dev.deck.length
+         && !(_holdPOf(p)>0 && _pCityByNextTurn(p)>=_holdPOf(p))){   // 都市が建つ見込みが高いならステイ
         const hasBase = placements[p].settlements.size>0 && placements[p].cities.size<4;
         const wReserve = hasBase?2:0, oReserve = hasBase?3:0;
         const canBuyNoRaid = (game.hands[p].wheat-wReserve>=COST.dev.wheat)
@@ -1344,7 +1740,8 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
       // ただし SMART_BURST: 「あと少しで建物になる手札」は、バーストを覚悟してでも温存する
       if(AGGRO_TRADE){
         let g2=0;
-        while(handTotal(p)>COMPRESS_THRESH && g2++<COMPRESS_ITERS){
+        while(handTotal(p)>_cmpOf(p) && g2++<COMPRESS_ITERS){
+          if(_holdPOf(p)>0 && _pCityByNextTurn(p)>=_holdPOf(p)) break;   // 都市が建つ見込みが高いならステイ
           if(typeof SMART_BURST!=="undefined" && SMART_BURST && _worthHoldingThroughBurst(p)) break;
           let best=null;
           for(const r of RES5){ const reserve=(COST.city[r]||0); const spare=game.hands[p][r]-reserve;
@@ -2082,7 +2479,7 @@ function _seatResPip(seat, res){
    ============================================================ */
 let ETA_W = 0, ETA_SEATS = null;
 let SCARCE_W = 0, SCARCE_SEATS = null;
-let LOOK_W = 0, LOOK_SEATS = null, LOOK_TOP = 8, _lookBusy = false;
+let LOOK_W = 0, LOOK_SEATS = null, LOOK_TOP = 6, _lookBusy = false;   // 6候補に絞って配置を高速化
 
 // 島全体の資源供給（pip合計）。盤面が変わらない限りキャッシュ。
 let _supCache = null, _supKey = null;
