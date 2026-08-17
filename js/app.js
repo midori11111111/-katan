@@ -851,8 +851,21 @@ function newMatch(){
 
 /* ---- モード（PC / スマホ） ---- */
 function updateModeBtn(){ $("modeBtn").textContent = (uiMode==="pc")?t("mode_pc"):t("mode_mobile"); }
+// スマホ表示では、行動ボタン列が横スクロールになるため、その最後尾にある交易UIが
+// 画面外（375px幅の端末で x=657px）に押し出されて事実上たどり着けなかった。
+// スマホ時だけ交易UIをボタン列の外へ出し、独立した行として常に見える位置に置く。
+function _placeTradeRow(){
+  const tr=document.querySelector(".trade"); const acts=$("actions");
+  if(!tr||!acts||!acts.parentElement) return;
+  if(uiMode==="mobile"){
+    if(tr.parentElement===acts){ acts.parentElement.insertBefore(tr, acts.nextSibling); tr.classList.add("traderow"); }
+  }else{
+    if(tr.parentElement!==acts){ const et=$("endTurnU"); acts.insertBefore(tr, et||null); tr.classList.remove("traderow"); }
+  }
+}
 function applyMode(){
   document.body.setAttribute("data-mode", uiMode);
+  _placeTradeRow();
   updateModeBtn();
   updateEvalBtn();                 // ラベル長がモードで変わるため再適用
   closeTopMenu();                  // モード切替時はメニューを閉じる
