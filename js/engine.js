@@ -319,6 +319,53 @@ function glog(msg){
 // このターンで起きた「棋譜のスナップショットからは復元できない行動」を構造化して記録する。
 // 交易 / 発展カード購入・使用（収穫・独占・騎士の対象）/ 捨て札 / 盗賊移動・強奪。
 // snapshotTurn 時に turn.actions として書き出し、humanagree等が機械的に読めるようにする。
+
+/* ============================================================
+   [2026-08-18] 棋譜に「その手を打った瞬間の評価値」を残す
+   computeAdvice() を**状態を変える前**に呼び、指した手が候補リストの何番目で
+   何点だったか、最善手は何だったかをログに刻む。ログはそのまま棋譜のイベントに
+   入るので「棋譜確認」で後から見返せる。
+   EVAL_LOG=false で無効（ログは従来どおり）。
+   ============================================================ */
+let EVAL_LOG = true;
+function _evalTag(kind, targetId){
+  if(!EVAL_LOG) return "";
+  try{
+    if(!game || game.phase!=="main") return "";
+    const adv = computeAdvice();
+    if(!adv || !adv.length) return "";
+    const match = a => {
+      if(kind==="city")   return a.label.indexOf("都市化")===0   && a.target && a.target.id===targetId;
+      if(kind==="settle") return a.label.indexOf("開拓地")===0   && a.target && a.target.id===targetId;
+      if(kind==="road")   return a.label.indexOf("道")===0       && a.target && a.target.id===targetId;
+      if(kind==="dev")    return a.label.indexOf("発展カード")===0;
+      return false;
+    };
+    let idx = adv.findIndex(match);
+    // 同種の手を指したが位置が候補と違う場合は「同種の最上位」を代用して位置ズレを明示する
+    let noted = "";
+    if(idx<0){
+      const same = a => {
+        if(kind==="city")   return a.label.indexOf("都市化")===0;
+        if(kind==="settle") return a.label.indexOf("開拓地")===0;
+        if(kind==="road")   return a.label.indexOf("道")===0;
+        if(kind==="dev")    return a.label.indexOf("発展カード")===0;
+        return false;
+      };
+      idx = adv.findIndex(same);
+      if(idx>=0) noted = "・AI推奨とは別の場所";
+    }
+    if(idx<0) return "";
+    const me = adv[idx], top = adv[0];
+    const fmt = x => (x<=-40 ? "対象外" : (x>=0?"+":"")+(Math.round(x*10)/10));
+    const sc = fmt(me.score);
+    const topShort = String(top.label).replace(/（.*$/,"").trim();
+    return (idx===0)
+      ? `〔評価 ${sc}・AI最善手${noted}〕`
+      : `〔評価 ${sc}・${idx+1}位（AI最善は「${topShort}」${fmt(top.score)}）${noted}〕`;
+  }catch(e){ return ""; }
+}
+
 function _recAct(o){ if(!game) return; if(!game._acts) game._acts=[]; game._acts.push(o); }
 // 現在の盤面状態を棋譜1コマとして記録（都市も含める）
 function snapshotTurn(){
@@ -447,11 +494,12 @@ function buyDev(){
   if(game.phase!=="main"){ toast("建設フェーズで買えます"); return; }
   if(!game.dev.deck.length){ toast("発展カードは売り切れ"); return; }
   if(!canPay(p,COST.dev)){ toast("資源が足りません(羊+小麦+鉱石)"); return; }
+  const _tagD=_evalTag("dev", null);
   pay(p,COST.dev);
   const c=game.dev.deck.pop();
   game.dev.hands[p][c]++; game.dev.bought[p][c]++;
   toast(`発展カードを購入（${DEV_JP[c]}）`);
-  glog(`発展カードを購入`);
+  glog(`発展カードを購入`+(_tagD?" "+_tagD:""));
   _recAct({a:"devBuy", p, card:c});
   checkWin(); render(); updateGamePanel();
 }
@@ -574,10 +622,11 @@ function gameClickVertex(vid){
   if(oc && oc.p===p && oc.type==="settlement"){
     if(placements[p].cities.size>=4){ toast("都市は4つまでです"); return; }
     if(!canPay(p,COST.city)){ toast("都市化には 小麦2+鉱石3"); return; }
+    const _tagC=_evalTag("city", vid);
     pay(p,COST.city);
     placements[p].settlements.delete(vid);
     placements[p].cities.add(vid);
-    toast("都市化！"); glog("🏛 都市化");
+    toast("都市化！"); glog("🏛 都市化"+(_tagC?" "+_tagC:""));
     _recAct({a:"build", p, kind:"city", id:vid});
     updateLongestRoad(); checkWin(); render(); updateGamePanel(); return;
   }
@@ -587,9 +636,10 @@ function gameClickVertex(vid){
   const touchMyRoad=GEO.edges.some(e=>(e.a===vid||e.b===vid)&&placements[p].roads.has(e.id));
   if(!touchMyRoad){ toast("自分の道に接した場所にだけ建てられます"); return; }
   if(!canPay(p,COST.settlement)){ toast("開拓地には 木+レンガ+羊+小麦"); return; }
+  const _tagS=_evalTag("settle", vid);
   pay(p,COST.settlement);
   placements[p].settlements.add(vid);
-  toast("開拓地を建設！"); glog("🏠 開拓地を建設");
+  toast("開拓地を建設！"); glog("🏠 開拓地を建設"+(_tagS?" "+_tagS:""));
   _recAct({a:"build", p, kind:"settle", id:vid});
   updateLongestRoad(); checkWin(); render(); updateGamePanel();
 }
@@ -621,13 +671,14 @@ function gameClickEdge(eid){
   if(!connects){ toast("自分の道か建物につながる場所にだけ置けます"); return; }
   if(placements[p].roads.size>=15){ toast("道は15本までです"); return; }
   let _freeRoad=false;
+  const _tagR=_evalTag("road", eid);
   if(game.freeRoads>0){
     game.freeRoads--; placements[p].roads.add(eid); _freeRoad=true;
-    toast(`道を建設（無料 残り${game.freeRoads}）`); glog("🛤 道を建設（無料）");
+    toast(`道を建設（無料 残り${game.freeRoads}）`); glog("🛤 道を建設（無料）"+(_tagR?" "+_tagR:""));
   }else{
     if(!canPay(p,COST.road)){ toast("道には 木+レンガ"); return; }
     pay(p,COST.road); placements[p].roads.add(eid);
-    toast("道を建設！"); glog("🛤 道を建設");
+    toast("道を建設！"); glog("🛤 道を建設"+(_tagR?" "+_tagR:""));
   }
   _recAct({a:"build", p, kind:"road", id:eid, free:_freeRoad?1:0});
   updateLongestRoad(); checkWin(); render(); updateGamePanel();
