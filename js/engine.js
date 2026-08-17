@@ -2018,6 +2018,91 @@ function _seatResPip(seat, res){
     for(const vid of set) for(const hid of (GEO.vertex_hexes[String(vid)]||[])){ const b=board[hid]; if(b&&b.number&&b.resource===res) pip+=pipOf(b.number)*mult; } }
   return pip;
 }
+
+/* ============================================================
+   [2026-08-18 出荷] 強い人間の思考回路から輸入した配置3項
+   本人の原理:
+    A5「自分が何ダイスで10点に到達できますか、が最も大事」→ backSolve(=10点までの最短期待ターン)で配置を採点
+    A3「島に薄い資源を自分だけが強い数字で確保できるなら道賞を確定した段階で試合を開始できる」→ 希少資源の独占度
+    A1/A2「1〜4番手が期待値通りに置いたらどこかを全部先読み」「置かれるとまずい建地を潰す」→ 全員配置後の相対ETA
+   研究側(zoo.js)の実測: 標準AIに対し配置3項で +10.0pt、探索併用で +14.0pt（40盤面・自己対戦対照つき・独立2盤面セットで再現）
+   重みは小さく混ぜる（大きくすると悪化する。較正済みの静的評価は強い事前分布）。
+   既定は全てOFF（W=0 / SEATS=null）＝従来モードは完全に非回帰。
+   ============================================================ */
+let ETA_W = 0, ETA_SEATS = null;
+let SCARCE_W = 0, SCARCE_SEATS = null;
+let LOOK_W = 0, LOOK_SEATS = null, LOOK_TOP = 8, _lookBusy = false;
+
+// 島全体の資源供給（pip合計）。盤面が変わらない限りキャッシュ。
+let _supCache = null, _supKey = null;
+function _boardSupply(){
+  let key=""; for(const hx of GEO.hexes){ const b=board[hx.id]; key += b ? (b.resource||"")+(b.number||0)+"," : ","; }
+  if(_supKey===key && _supCache) return _supCache;
+  const sup={wood:0,brick:0,sheep:0,wheat:0,ore:0};
+  for(const hx of GEO.hexes){ const b=board[hx.id];
+    if(b&&b.number&&b.resource&&b.resource!=="desert") sup[b.resource]+=pipOf(b.number); }
+  _supKey=key; _supCache=sup; return sup;
+}
+// 候補頂点を仮に置いた時の「10点までの最短期待ターン数」
+function _etaIfPlaced(p, v){
+  const pl = placements[p]; if(!pl) return null;
+  let added=false;
+  try{
+    if(!pl.settlements.has(v)){ pl.settlements.add(v); added=true; }
+    const bs = backSolve(p);
+    return bs ? bs.turns : null;
+  }catch(e){ return null; }
+  finally{ if(added) pl.settlements.delete(v); }
+}
+// 縮約プラン集合のETA（先読み用・backSolveの63プランは重すぎる）。本人が挙げた勝ち筋だけ。
+const LITE_PLANS = [
+  {C:4,S:2,V:0,LR:0,LA:0}, {C:3,S:2,V:0,LR:0,LA:1}, {C:2,S:4,V:0,LR:0,LA:1},
+  {C:2,S:4,V:0,LR:1,LA:0}, {C:3,S:3,V:1,LR:0,LA:0}, {C:2,S:2,V:0,LR:1,LA:1},
+];
+function _etaLite(q){
+  try{
+    const cur_c = placements[q].cities ? placements[q].cities.size : 0;
+    let best = Infinity;
+    for(const pl of LITE_PLANS){ if(pl.C < cur_c) continue;
+      const t = backSolveOne(q, pl); if(t < best) best = t; }
+    return isFinite(best) ? best : null;
+  }catch(e){ return null; }
+}
+// 候補vを置く→残りの席が期待値通りに置く→「自分のETA − 相手最速ETA」
+// ※先読み内のcomputeBestが再び先読みを起動すると指数爆発するので _lookBusy で再入禁止。
+function _lookaheadETADiff(sp, v){
+  const su = game.setup; if(!su || _lookBusy) return null;
+  _lookBusy = true;
+  const added = [];
+  const _um = (typeof useModel!=="undefined") ? useModel : null;
+  try{
+    if(placements[sp].settlements.has(v)) return null;
+    placements[sp].settlements.add(v); added.push([sp, v]);
+    if(_um!==null) useModel = false;              // 先読み内は静的スコアのみ（相手の"期待値通り"の近似・高速）
+    const LIM = Math.min(su.queue.length, su.step + 1 + 3);
+    for(let i = su.step + 1; i < LIM; i++){
+      const q = su.queue[i];
+      let pick = null;
+      try{ const B = computeBest(); pick = B.ranked.length ? B.ranked[0] : null; }catch(e){ break; }
+      if(pick == null) break;
+      placements[q].settlements.add(pick); added.push([q, pick]);
+    }
+    if(_um!==null) useModel = _um;
+    const mine = _etaLite(sp);
+    let oppBest = Infinity;
+    for(let q = 1; q <= numPlayers; q++){ if(q === sp) continue;
+      if(!placements[q].settlements.size) continue;
+      const e = _etaLite(q); if(e != null && e < oppBest) oppBest = e; }
+    if(mine == null || !isFinite(oppBest)) return null;
+    return oppBest - mine;
+  }catch(e){ return null; }
+  finally{
+    if(_um!==null) useModel = _um;
+    _lookBusy = false;
+    for(const [q, vid] of added) placements[q].settlements.delete(vid);
+  }
+}
+
 function computeBest(resFactorOverride){
   const RF = resFactorOverride || (SCORE_RF || BEST_W.resFactor);
   // 現在配置中の席が既に触れている資源（2軒目の多様性を「新規分だけ」で測るため）
@@ -2082,10 +2167,39 @@ function computeBest(resFactorOverride){
                 : ((typeof game!=="undefined" && game && game.order) ? cur() : null);
       if(_ps!=null) sc += PORT_SYNERGY_W * _seatResPip(_ps, pt);
     }
+    // [A5] ETA（あと何ダイスで10点か）: 短いほど加点
+    if(ETA_W && ETA_SEATS && typeof game!=="undefined" && game && game.setup){
+      const _spE = game.setup.queue[game.setup.step];
+      if(_spE!=null && ETA_SEATS.has(_spE)){
+        const eta = _etaIfPlaced(_spE, vtx.id);
+        if(eta!=null && isFinite(eta)) sc -= ETA_W * eta;
+      }
+    }
+    // [A3] 島の希少資源の独占度
+    if(SCARCE_W && SCARCE_SEATS){
+      const _sp2 = (typeof game!=="undefined" && game && game.setup) ? game.setup.queue[game.setup.step]
+                 : ((typeof game!=="undefined" && game && game.order) ? cur() : null);
+      if(_sp2!=null && SCARCE_SEATS.has(_sp2)){
+        const sup=_boardSupply(); let mono=0;
+        for(const r in resPip){ if(sup[r]>0) mono += resPip[r]/sup[r]; }
+        sc += SCARCE_W * mono;
+      }
+    }
     scores[vtx.id]={score:sc, pip, div:res.size, port:!!pt};
     if(sc<mn)mn=sc; if(sc>mx)mx=sc;
   }
-  const ranked=Object.keys(scores).map(Number).sort((a,b)=>scores[b].score-scores[a].score);
+  let ranked=Object.keys(scores).map(Number).sort((a,b)=>scores[b].score-scores[a].score);
+  // [A1/A2] 相手の期待配置を先読み。重いので上位候補だけ再採点する（人間も現実的な候補しか読まない）。
+  if(LOOK_W && LOOK_SEATS && typeof game!=="undefined" && game && game.setup){
+    const _spL = game.setup.queue[game.setup.step];
+    if(_spL!=null && LOOK_SEATS.has(_spL)){
+      for(const vid of ranked.slice(0, LOOK_TOP)){
+        const d = _lookaheadETADiff(_spL, vid);
+        if(d!=null && isFinite(d)) scores[vid].score += LOOK_W * d;
+      }
+      ranked=Object.keys(scores).map(Number).sort((a,b)=>scores[b].score-scores[a].score);
+    }
+  }
   return {scores, ranked, mn, mx};
 }
 

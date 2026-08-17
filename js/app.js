@@ -27,7 +27,7 @@ const I18N = {
     setup_title:"対局の設定",
     setup_lead:"各席のAIタイプを選んで対局。<br><b>挑戦者(関与なし)</b>=自己対戦だけで学習・人間データ不使用／<b>人間模倣</b>=強者棋譜由来の港評価・遅延盗賊・人間寄り配置ON／<b>現行AI</b>=従来の標準型。3種を並べて打たせ見比べられます。",
     your_seat:"あなたの席", you_operate:"あなた（この席を操作）",
-    challenger_full:"人間模倣（強者データ由来）", cpure_full:"挑戦者(関与なし)", standard_full:"現行AI（学習モデル・標準）",
+    strong_full:"最強AI（v2）", ai_strong:"最強AI", challenger_full:"人間模倣（強者データ由来）", cpure_full:"挑戦者(関与なし)", standard_full:"現行AI（学習モデル・標準）",
     shuffle_btn:"盤面シャッフル", start_btn:"対局開始",
     start_lang:"言語", start_mode:"画面", lang_ja:"日本語", lang_en:"English",
     ai_challenger:"人間模倣", ai_cpure:"挑戦者(関与なし)", ai_standard:"現行AI", ai_you:"あなた",
@@ -98,7 +98,7 @@ const I18N = {
     setup_title:"Game setup",
     setup_lead:"Pick each seat's AI type, then start.<br><b>Challenger (raw)</b> = self-play only, no human data. <b>Human-imitation</b> = strong-player port valuation, delayed robber, human-like placement ON. <b>Current AI</b> = the previous default. Run all three side by side to compare.",
     your_seat:"Your seat", you_operate:"You (you play this seat)",
-    challenger_full:"Human-imitation (from strong-player data)", cpure_full:"Challenger (no-human data)", standard_full:"Current AI (learning model)",
+    strong_full:"Strongest AI (v2)", ai_strong:"Strongest", challenger_full:"Human-imitation (from strong-player data)", cpure_full:"Challenger (no-human data)", standard_full:"Current AI (learning model)",
     shuffle_btn:"Shuffle board", start_btn:"Start game",
     start_lang:"Language", start_mode:"Display", lang_ja:"日本語", lang_en:"English",
     ai_challenger:"Human-imitation", ai_cpure:"Challenger (raw)", ai_standard:"Current AI", ai_you:"You",
@@ -164,7 +164,7 @@ function t(k, a){
   return (typeof v==="function") ? v(a||{}) : v;
 }
 function resName(r){ return t("res_"+r); }
-function seatAiName(p){ const x=seatAI[p]; return x==="challenger"?t("ai_challenger"):x==="cpure"?t("ai_cpure"):x==="puremodel"?t("ai_standard"):t("ai_you"); }
+function seatAiName(p){ const x=seatAI[p]; return x==="strong"?t("ai_strong"):x==="challenger"?t("ai_challenger"):x==="cpure"?t("ai_cpure"):x==="puremodel"?t("ai_standard"):t("ai_you"); }
 
 // 日本語ログ/トースト文字列を英語に（エンジンが生成する文言用のベストエフォート変換）
 function _devEn(c){ return String(c).replace(/騎士/g,"Knight").replace(/勝利点/g,"VP").replace(/街道建設/g,"Road building").replace(/収穫/g,"Year of plenty").replace(/独占/g,"Monopoly"); }
@@ -211,9 +211,9 @@ function jaToEn(s){
    ============================================================ */
 // 各席の担当: "human" / "cpure"(挑戦者=関与なし) / "challenger"(人間模倣) / "puremodel"(現行AI)
 // 既定は「あなた vs 3変種を1席ずつ」＝3種を直接見比べられる構成（開始画面で自由に変更可）
-let seatKind = {1:"human",2:"cpure",3:"challenger",4:"puremodel"};
+let seatKind = {1:"human",2:"strong",3:"strong",4:"strong"};   // 既定＝あなた vs 最強AI3人
 let humanSeat = 1;   // 先頭の人間席（開始時に導出。単一参照が要る箇所の既定フォーカス用）
-let seatAI = {1:"human",2:"cpure",3:"challenger",4:"puremodel"};
+let seatAI = {1:"human",2:"strong",3:"strong",4:"strong"};
 let paused = false;
 let evalOn = false;
 let aiSpeedSec = 1.0;
@@ -277,7 +277,20 @@ function scheduleAI(base){ if(paused) return; clearTimeout(aiTimer); aiTimer=set
 //  puremodel=現行AI: 全OFF＋computeBest(港なし)で配置（従来のベースライン）
 function _applyVariant(seat){
   const k = (seat!=null && typeof seatAI!=="undefined") ? seatAI[seat] : null;
-  const human = (k==="challenger");        // 人間模倣だけが人間由来の挙動をONにする
+  const human = (k==="challenger" || k==="strong");   // 人間模倣・最強AIが人間由来の挙動をONにする
+  // [2026-08-18] 最強AI: 強い人間の原理から輸入した配置3項をこの席にだけ効かせる。
+  //  ETA(あと何ダイスで10点) / 希少資源の独占 / 相手配置の先読み。研究側の実測で標準AIに +10.0pt。
+  //  重みは小さい値が正解（大きくすると悪化する）。他の席・他モードには一切影響しない。
+  try{
+    if(k==="strong"){
+      const one=new Set([seat]);
+      ETA_W=0.02;   ETA_SEATS=one;
+      SCARCE_W=15;  SCARCE_SEATS=one;
+      LOOK_W=0.01;  LOOK_SEATS=one;
+    }else{
+      ETA_W=0; ETA_SEATS=null; SCARCE_W=0; SCARCE_SEATS=null; LOOK_W=0; LOOK_SEATS=null;
+    }
+  }catch(e){}
   try{ PORT_SYNERGY = human; }catch(e){}    // 港シナジー（配置スコア）
   try{ HP1_PORT     = human; }catch(e){}    // 蒸留の港項（cpureは蒸留を使うがHP1はoff=純自己対戦）
   try{ ROBBER_DELAY = human; }catch(e){}    // 遅延盗賊（本編）
@@ -862,7 +875,7 @@ function buildStartScreen(){
   const subEl=document.querySelector(".sublabel[data-i18n='your_seat']");
   if(subEl) subEl.textContent = (LANG==="en"?"Who plays each seat (hot-seat OK)":"各席の担当（人間を複数席OK）");
   $("seatPick").innerHTML="";
-  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["cpure",t("cpure_full")],["challenger",t("challenger_full")],["puremodel",t("standard_full")]];
+  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["strong",t("strong_full")],["cpure",t("cpure_full")],["challenger",t("challenger_full")],["puremodel",t("standard_full")]];
   const grid=$("seatGrid"); grid.innerHTML="";
   for(let s=1;s<=4;s++){
     const row=document.createElement("div"); row.className="seatrow";
