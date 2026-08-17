@@ -2103,6 +2103,22 @@ function _lookaheadETADiff(sp, v){
   }
 }
 
+
+// [2026-08-18] 評価表示用: 「最強AI(v2)」と同じ重みで採点した computeBest を返す。
+//  対局中のAI席は _applyVariant で重みが立つが、**人間の手番の評価表示は重み0のまま**だったので、
+//  盤面ハイライトも評価タブも旧評価を表示していた。ここを最強AIの目線に揃える。
+let EVAL_STRONG = true;   // false にすると従来どおり（素のcomputeBest）
+function computeBestStrong(seat){
+  if(!EVAL_STRONG || seat==null) return computeBest();
+  const s={EW:ETA_W,ES:ETA_SEATS,SW:SCARCE_W,SS:SCARCE_SEATS,LW:LOOK_W,LS:LOOK_SEATS};
+  try{
+    const one=new Set([seat]);
+    ETA_W=0.02; ETA_SEATS=one; SCARCE_W=15; SCARCE_SEATS=one; LOOK_W=0.01; LOOK_SEATS=one;
+    return computeBest();
+  }catch(e){ return computeBest(); }
+  finally{ ETA_W=s.EW; ETA_SEATS=s.ES; SCARCE_W=s.SW; SCARCE_SEATS=s.SS; LOOK_W=s.LW; LOOK_SEATS=s.LS; }
+}
+
 function computeBest(resFactorOverride){
   const RF = resFactorOverride || (SCORE_RF || BEST_W.resFactor);
   // 現在配置中の席が既に触れている資源（2軒目の多様性を「新規分だけ」で測るため）
@@ -3344,7 +3360,8 @@ function render(){
   // 最善配置ハイライト（シミュ中は開拓地フェーズのみ）
   if(showBest && (!sim || sim.phase==="settle")){
     const useMCTS = (SCORE_METHOD==="mcts");
-    const B=computeBest();
+    const _bs = (typeof game!=="undefined" && game && game.setup) ? game.setup.queue[game.setup.step] : null;
+    const B=computeBestStrong(_bs);
     let mctsReady=false;
     if(useMCTS){
       const key=_mctsAdvKey();

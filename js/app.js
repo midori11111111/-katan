@@ -582,7 +582,8 @@ function updateEval(){
         <div><div class="lab">${evLabel(r.label)}${na}</div>${r.pts>0?`<div class="evbar"><i style="width:${w}%"></i></div>`:""}</div></div>`;
     }).join("") || `<div class="hint">${t("eval_nocand")}</div>`;
   } else {
-    let B; try{ B=computeBest(); }catch(e){ B={ranked:[],scores:{},mn:0,mx:0}; }
+    const _bseat=(game.setup?game.setup.queue[game.setup.step]:null);
+    let B; try{ B=computeBestStrong(_bseat); }catch(e){ B={ranked:[],scores:{},mn:0,mx:0}; }
     plan.innerHTML = t("eval_place_note");
     const top=B.ranked.slice(0,6);
     list.innerHTML = top.map((vid,i)=>{
