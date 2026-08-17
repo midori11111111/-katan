@@ -211,9 +211,9 @@ function jaToEn(s){
    ============================================================ */
 // 各席の担当: "human" / "cpure"(挑戦者=関与なし) / "challenger"(人間模倣) / "puremodel"(現行AI)
 // 既定は「あなた vs 3変種を1席ずつ」＝3種を直接見比べられる構成（開始画面で自由に変更可）
-let seatKind = {1:"human",2:"strong",3:"strong",4:"strong"};   // 既定＝あなた vs 最強AI3人
-let humanSeat = 1;   // 先頭の人間席（開始時に導出。単一参照が要る箇所の既定フォーカス用）
-let seatAI = {1:"human",2:"strong",3:"strong",4:"strong"};
+let seatKind = {1:"strong",2:"strong",3:"human",4:"strong"};   // 既定＝あなたが3番手(P3) vs 最強AI3人
+let humanSeat = 3;   // 先頭の人間席（開始時に導出。単一参照が要る箇所の既定フォーカス用）
+let seatAI = {1:"strong",2:"strong",3:"human",4:"strong"};
 let paused = false;
 let evalOn = false;
 let aiSpeedSec = 1.0;
