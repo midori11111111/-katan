@@ -259,8 +259,19 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 #rvEvents{margin-top:6px; font-size:12px; color:var(--muted); max-height:70px; overflow:auto}
 #rvEvents > div{padding:1px 0}
 /* リプレイ中はスマホの盤面を縮めて、盤面＋リプレイバーが両方収まるように */
-body[data-mode="mobile"].replaying svg#board{max-height:26vh; max-height:26dvh}
-body[data-mode="mobile"].replaying #replayBar{max-height:34vh}
+/* リプレイ中は盤面を主役にする: 手札バー・タブを畳み、盤面を大きく取る */
+body.replaying #handRegion{display:none}
+body.replaying #tabBar{display:none}
+body[data-mode="mobile"].replaying svg#board{max-height:52vh; max-height:52dvh}
+body[data-mode="mobile"].replaying #replayBar{max-height:44vh; overflow-y:auto}
+body[data-mode="pc"].replaying svg#board{max-height:70vh}
+/* コメント欄 */
+#rvNotes{margin-top:8px; display:flex; flex-direction:column; gap:4px}
+#rvNotes .rvnl{font-size:11px; color:var(--muted)}
+#rvNotes textarea{width:100%; box-sizing:border-box; background:var(--panel2); color:var(--fg);
+  border:1px solid var(--line); border-radius:8px; padding:6px 8px; font-size:12.5px; font-family:inherit; resize:vertical}
+#rvNotes textarea:focus{outline:none; border-color:var(--accent, #e0b341)}
+.rvnoted{color:var(--accent, #e0b341)}
 /* 手動配置モード */
 #composerBar{display:none; flex:0 0 auto; margin-top:8px; max-height:44vh; overflow:auto;
   background:rgba(16,21,28,.95); border:1px solid var(--gold); border-radius:12px; padding:9px 11px; box-shadow:0 10px 30px rgba(0,0,0,.5)}

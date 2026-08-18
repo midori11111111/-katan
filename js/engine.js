@@ -4300,6 +4300,7 @@ function fromJSON(data){
   winner = data.winner ?? null;
   bestPlayer = (data.label ?? data.winner) ?? null;
   dataSource = data.source || "manual";
+  try{ if(typeof gameNote!=="undefined") gameNote = data.note || ""; }catch(e){}
   if(Array.isArray(data.replay) && data.replay.length){
     replay={turns:data.replay, idx:0, active:true};
     document.getElementById("replayBar").style.display="";

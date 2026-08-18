@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>カタン 挑戦者AI 対局</title>
-<link rel="stylesheet" href="css/styles.css?v=20260818b">
+<link rel="stylesheet" href="css/styles.css?v=20260818d">
 </head>
 <body data-mode="pc" data-lang="ja">
 
@@ -59,6 +59,12 @@
       </div>
       <div id="rvHands"></div>
       <div id="rvEvents"></div>
+      <div id="rvNotes">
+        <label class="rvnl" for="rvTurnNote">このターンへのコメント</label>
+        <textarea id="rvTurnNote" rows="2" placeholder="この手について気づいたことを書く（棋譜に保存されます）"></textarea>
+        <label class="rvnl" for="rvGameNote">この対局全体へのコメント</label>
+        <textarea id="rvGameNote" rows="2" placeholder="対局全体の総評（棋譜に保存されます）"></textarea>
+      </div>
     </div>
     <div id="composerBar">
       <div class="rvtop">
@@ -198,7 +204,7 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="js/engine.js?v=20260818b"></script>
-<script src="js/app.js?v=20260818b"></script>
+<script src="js/engine.js?v=20260818d"></script>
+<script src="js/app.js?v=20260818d"></script>
 </body>
 </html>

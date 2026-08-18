@@ -216,6 +216,7 @@ let humanSeat = 3;   // 先頭の人間席（開始時に導出。単一参照�
 let seatAI = {1:"strong",2:"strong",3:"human",4:"strong"};
 let paused = false;
 let evalOn = false;
+let gameNote = "";   // 対局全体へのコメント（棋譜に保存）
 let aiSpeedSec = 1.0;
 let aiTimer = null;
 let _rerendering = false;
@@ -671,7 +672,22 @@ function showReplayTurn(){
   }
   const evs=(turn.events&&turn.events.length)?turn.events:[t("rv_no_events")];
   $("rvEvents").innerHTML = evs.map(x=>`<div>${LANG==="en"?jaToEn(x):x}</div>`).join("");
+  // このターンへのコメント（棋譜に保存される）
+  const tn=$("rvTurnNote");
+  if(tn){ tn.value = turn.note || "";
+    tn.oninput = ()=>{ turn.note = tn.value; _markNoted(); }; }
+  const gn=$("rvGameNote");
+  if(gn){ gn.value = (typeof gameNote!=="undefined" && gameNote) ? gameNote : "";
+    gn.oninput = ()=>{ gameNote = gn.value; }; }
+  _markNoted();
   render();
+}
+// コメントの付いたターンが一目で分かるようにカウンタへ印を出す
+function _markNoted(){
+  if(!replay) return;
+  const n=replay.turns.filter(x=>x.note && x.note.trim()).length;
+  const c=$("rvCount");
+  if(c) c.innerHTML = t("rv_count",{i:replay.idx+1, n:replay.turns.length}) + (n?` <span class="rvnoted">✎${n}</span>`:"");
 }
 function startReplay(){
   if(!game || !game.turns || !game.turns.length){ toast(t("toast_no_record")); return; }
@@ -782,6 +798,7 @@ function composerExport(){
 function exportRecord(){
   if(!game){ toast(t("toast_no_record")); return; }
   const rec=toJSON();
+  if(gameNote && gameNote.trim()) rec.note = gameNote;   // 対局全体へのコメント
   const blob=new Blob([JSON.stringify(rec,null,2)],{type:"application/json"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="game_record.json";
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
