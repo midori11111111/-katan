@@ -2276,8 +2276,8 @@ function randomBoardShuffled(){
 
 // 公式の螺旋順（島の角から中央へ反時計回り）。geometry座標から算出済みの固定順。
 const SPIRAL_ORDER=[7,3,0,1,2,6,11,15,18,17,16,12,8,4,5,10,14,13,9];
-// 標準の数値トークン列 A〜R（アルファベット順）: A5 B2 C6 D3 E8 F10 G9 H12 I11 J4 K8 L10 M9 N5 O4 P6 Q3 R11
-const OFFICIAL_TOKENS=[5,2,6,3,8,10,9,12,11,4,8,10,9,5,4,6,3,11];
+// 標準の数値トークン列 A〜R（アルファベット順）: A5 B2 C6 D3 E8 F10 G9 H12 I11 J4 K8 L10 M9 N4 O5 P6 Q3 R11
+const OFFICIAL_TOKENS=[5,2,6,3,8,10,9,12,11,4,8,10,9,4,5,6,3,11];
 // 資源はそのままに、数字だけ公式の螺旋配置で置き直す（砂漠は飛ばす）
 function assignOfficialNumbers(){
   let i=0;
@@ -4261,7 +4261,13 @@ const BOUNDARY_ADJ=(()=>{
   return adj;
 })();
 
-function randomPorts(){
+// 港は**公式どおり固定のドック位置**に置く。実物のCatanは海枠に港が印刷されていて動かず、
+// 「どのドックがどの資源の港か」だけが並べ方で変わる。
+// 公式の間隔は海岸線30辺に対して (3,3,4)×3 ＝ どの港どうしも2辺以上離れる。
+function randomPorts(){ officialPorts(); }
+// 旧: 海岸線からランダムに9箇所（隣接だけ回避）。公式の等間隔になっておらず、
+//     実測で間隔が 3,3,3,6,3,2,3,2,5 のように偏っていた。参考のため残す。
+function randomPortsScattered(){
   ports={};
   const types=shuffle(PORT_TYPES.slice());   // 9個（3:1×4, 各資源2:1×5）
   // 港どうしが隣り合わないように海岸線へ配置（公式は等間隔＝隣接しない）
