@@ -878,7 +878,8 @@ let COMPRESS_THRESH=5, COMPRESS_ITERS=10;
 let UNIFORM_TEMP=0;   // >0 にすると自己対戦の全席が同じ配置腕前になる（試合長の計測用）
 let W_CITY=1.0, W_SETTLE=1.0, W_ROAD=1.0, W_DEV=1.0;   // 行動の重み（1.0=現行のまま）
 // ユーザー調整: 開拓地が即開く道／道賞プランの時だけ道を建て、それ以外（余剰資源の消化・投機的な2手先）は温存
-let CONSERVE_ROADS=true;
+let CONSERVE_ROADS=false;   // [2026-08-18] 40盤面6000試合の対応比較で -2.2pt [-4.1〜-0.3]＝有意に有害と判明したため無効化
+                            //  （「即建設地が開く道／道賞プラン以外は評価-50」「序盤は初期道+1本以外-50」の2つの足切り）
 // ユーザー調整: 相手を「危険」とみなすVP閾値（9→8）。妨害・賞の奪い返しをVP8から発動
 let DANGER_VP=8;
 // ユーザー調整: 序盤は「初期配置の道＋1本(その1本で建て地が相当良くなる場合)」以外、道賞狙いでも道は-評価
@@ -2606,7 +2607,15 @@ function computeBest(resFactorOverride){
     for(const n in numCount) if(numCount[n]>=2) sc+=BEST_W.sameNumber*pipOf(Number(n))*(numCount[n]-1);
     const pt=portAt[vtx.id];
     if(pt){ sc+=BEST_W.portBase; if(pt!=="3:1" && resPip[pt]) sc+=BEST_W.portMatch*resPip[pt]; }
-    if(useModel && !(typeof FAST_PLAYOUT!=="undefined" && FAST_PLAYOUT)){ const _activeP = (typeof sim!=="undefined" && sim) ? sim.order[sim.step] : ((typeof active!=="undefined" && active) ? active : ((typeof game!=="undefined" && game && game.order) ? cur() : 1));
+    if(useModel && !(typeof FAST_PLAYOUT!=="undefined" && FAST_PLAYOUT)){
+      // [重大バグ修正 2026-08-18] 初期配置中の手番は game.setup.queue[step] であって cur() ではない。
+      //  旧実装は cur()（配置中は常に席1）を渡していたため、席に依存する特徴——特に
+      //  complement_score（自分の1軒目が触れていない資源）と seat_* ——が他人を基準に計算されていた。
+      //  研究側の実測: 配置時に渡した席が誤り3491回 / 正1197回（74%が誤り）。
+      const _setupSeat = (typeof game!=="undefined" && game && game.setup) ? game.setup.queue[game.setup.step] : null;
+      const _activeP = (typeof sim!=="undefined" && sim) ? sim.order[sim.step]
+                     : (_setupSeat!=null ? _setupSeat
+                     : ((typeof active!=="undefined" && active) ? active : ((typeof game!=="undefined" && game && game.order) ? cur() : 1)));
       sc = sc*(1-MODEL_BLEND) + vertexModelScore(vtx.id, _activeP)*100*MODEL_BLEND; }   // 合成比 MODEL_BLEND（既定0.75=静的25%+モデル75%。調整バーで可変）
     // 2軒目の多様性補正（ユーザー指摘）: 1軒目で持っていない「新規資源」をモデルブレンドの後に加点する。
     // 1軒目羊麦木→2軒目も羊麦木なら新規ゼロで加点なし。鉄など未所持資源を持つ頂点は正しく浮上する。
