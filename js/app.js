@@ -306,11 +306,14 @@ function _applyVariant(seat){
       ROAD_WIN_SEATS=one;
       // 手札圧縮: 8枚から。ただし次の自分の番までに都市が50%以上で建つ見込みならステイ
       TURN_CFG={}; TURN_CFG[seat]={dbt:7, cmp:7, holdP:0.5};
+      // [2026-08-19] 道の行き先を経路ベースにし、目的地に「使える港」を加える（+6.0pt）
+      ROAD_PATH_SEATS=one; ROAD_PORT_W=1;
       // 無敵AIだけ本編をロールアウト探索で打つ
       ROLLOUT_SEATS = (k==="invincible") ? one : null;
     }else{
       ETA_W=0; ETA_SEATS=null; SCARCE_W=0; SCARCE_SEATS=null; LOOK_W=0; LOOK_SEATS=null;
       ROAD_WIN_SEATS=null; TURN_CFG=null; ROLLOUT_SEATS=null;
+      ROAD_PATH_SEATS=null; ROAD_PORT_W=0;
     }
   }catch(e){}
   try{ PORT_SYNERGY = human; }catch(e){}    // 港シナジー（配置スコア）
