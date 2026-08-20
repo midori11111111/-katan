@@ -2361,10 +2361,11 @@ let USE_GBM=false;   // [2026-08-19] USE_GBM=true だと vertexModelScore が gb
                      //  実測 +5.8pt(SEED=71) / +6.8pt(SEED=101)（40盤面・各6000試合・対照つき）
 const ROBBER_MODEL={"feature_names": ["pip", "maxVpTouched", "sumWeightedPip", "selfTouched", "numOwners", "diceCount", "is_ore", "is_wheat", "is_sheep", "is_wood", "is_brick"], "mean": [3.9588766883684774, 4.604353318433582, 10.628581608525248, 0.07820425614614712, 1.7736533540634212, 44.962141677193664, 0.30641013183040194, 0.39724678521685614, 0.10144786706831212, 0.10288601690797784, 0.0791954134680789], "scale": [1.163394402844868, 2.409477011293381, 6.266551935784059, 0.26849273820093317, 0.7867552923698771, 25.33105352918398, 0.46100212899972043, 0.48932788276539185, 0.3019208461424599, 0.30380994788286375, 0.2700435149261598], "coef": [0.11951118221174424, -0.5562694803798628, -0.15672487677173366, -0.055394932983823926, 0.20306044716106517, 0.48439133193067957, 0.16193125883205328, 0.21195243937940772, 0.09540894632488735, 0.11428222499031938, 0.09895558184365694], "intercept": -0.8916678856737725, "auc": 0.6035114826851945, "n_events": 181606};
 let USE_ROBBER_MODEL=false;   // 検証済み: AUC0.6035は確認したが実戦(4000試合)では24.35%と中立〜微減。デフォルトOFF。
-let USE_THREAT=true;   // 盗賊の標的を「表面VP」ではなく「脅威度」で選ぶ（カード購入数・騎士数・生産力・都市数を加味）
+let USE_THREAT=true;   // 盗賊の標的を「表面VP」ではなく「脅威度」で選ぶ（カード購入数・騎士数・生産力を加味）
 // 検証: カード多用の人間型ボット相手に、相手の勝率を23.8%→21.5% / 22.5%→21.9% に抑制（計5000試合で一貫）
 // 脅威度の重み（すべて公開情報のみ）
-let THREAT_W={ vp:1.0, pip:0.10, city:0.5, dev:0.6, knight:0.8 };
+// city は旧設定との互換用に残すが既定0。都市の2倍産出は pip に既に含まれるため独立加点しない。
+let THREAT_W={ vp:1.0, pip:0.10, city:0, dev:0.6, knight:0.8 };
    // true=勾配ブースティング(木ベース), false=線形回帰
 let useModel=true;   // false=手書き戦略, true=学習モデル（学習単体AIと同じブレンド式）
 let MODEL_BLEND=0.75;   // 頂点評価の合成比: 0=手書きBEST_Wのみ / 1=学習モデルのみ（既定0.75。サイトの調整バーで可変）
@@ -3674,7 +3675,7 @@ function robberModelScore(hexId, actP){
 function threatOf(q){
   let t = vpOf(q) * THREAT_W.vp;
   // 生産力: 建物が接するタイルのpip合計（都市は2倍）
-  let pip=0, cities=0;
+  let pip=0;
   for(const hx of GEO.hexes){
     const b=board[hx.id];
     if(!b||!b.number||!b.resource||b.resource==="desert") continue;
@@ -3684,9 +3685,7 @@ function threatOf(q){
       if(oc&&oc.p===q) pip += pipOf(b.number) * (oc.type==="city"?2:1);
     }
   }
-  cities = placements[q] && placements[q].cities ? placements[q].cities.size : 0;
   t += pip * THREAT_W.pip;
-  t += cities * THREAT_W.city;
   // カード購入枚数（公開情報。VPカードを隠し持っている可能性＝見えないVP）
   const devBought = game.dev && game.dev.bought && game.dev.bought[q]
     ? Object.values(game.dev.bought[q]).reduce((a,b)=>a+b,0) : 0;
