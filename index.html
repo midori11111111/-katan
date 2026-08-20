@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>カタン 挑戦者AI 対局</title>
-<link rel="stylesheet" href="css/styles.css?v=20260820d">
+<link rel="stylesheet" href="css/styles.css?v=20260820g">
 </head>
 <body data-mode="pc" data-lang="ja">
 
@@ -23,6 +23,7 @@
       <span id="speedLabel" class="speedval">1.0秒</span>
     </div>
     <button id="evalBtn" class="btn">AI評価値: OFF</button>
+    <button id="winMeterBtn" class="btn">勝率ゲージ: OFF</button>
     <div class="menuwrap">
       <button id="menuBtn" class="btn icbtn menubtn" aria-haspopup="true" aria-expanded="false" title="メニュー">⋯</button>
       <div class="menu" id="topMenu">
@@ -37,6 +38,12 @@
       </div>
     </div>
   </div>
+</div>
+
+<div id="winMeter" aria-live="polite">
+  <div class="wmhead"><b>AI推定勝率</b><span>内部状態を含む参考値</span></div>
+  <div id="winMeterBar"></div>
+  <div id="winMeterLabels"></div>
 </div>
 
 <!-- ===== 本体（PCは2カラム / スマホは縦3段グリッド） ===== -->
@@ -212,7 +219,7 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="js/engine.js?v=20260820d"></script>
-<script src="js/app.js?v=20260820d"></script>
+<script src="js/engine.js?v=20260820g"></script>
+<script src="js/app.js?v=20260820g"></script>
 </body>
 </html>

@@ -216,6 +216,7 @@ let humanSeat = 3;   // 先頭の人間席（開始時に導出。単一参照�
 let seatAI = {1:"strong",2:"strong",3:"human",4:"strong"};
 let paused = false;
 let evalOn = false;
+let winMeterOn = false;
 let gameNote = "";   // 対局全体へのコメント（棋譜に保存）
 let aiSpeedSec = 1.0;
 let aiTimer = null;
@@ -435,9 +436,30 @@ function updateGamePanel(){
   renderBank();
   renderOpponents(activeSeat);
   updateEval();
+  updateWinMeter();
   updateLiveNoteUI();
   if(game.phase==="over") onGameOver();
 }
+
+function updateWinMeter(){
+  const box=$("winMeter"), bar=$("winMeterBar"), labels=$("winMeterLabels"), btn=$("winMeterBtn");
+  if(!box||!bar||!labels) return;
+  box.classList.toggle("on",winMeterOn);
+  if(btn) btn.textContent=(LANG==="en"?"Win meter: ":"勝率ゲージ: ")+(winMeterOn?"ON":"OFF");
+  if(!winMeterOn||!game) return;
+  let probs=null;
+  if(replay&&replay.active&&replay.turns[replay.idx]&&replay.turns[replay.idx].winProb) probs=replay.turns[replay.idx].winProb;
+  if(replay&&replay.active&&!probs){ bar.innerHTML=""; labels.innerHTML=`<div class="hint" style="grid-column:1/-1">${LANG==="en"?"No win-rate data in this record":"この棋譜には勝率記録がありません"}</div>`; return; }
+  if(!probs){ try{ probs=estimateWinProbabilities(); }catch(e){ probs=null; } }
+  if(!probs) return;
+  const vals=[1,2,3,4].map(p=>Math.max(0,Number(probs[p]||0)));
+  const sum=vals.reduce((a,b)=>a+b,0)||1;
+  const pct=vals.map(v=>v/sum*100);
+  bar.innerHTML=pct.map((v,i)=>`<div class="wmseg" style="width:${v.toFixed(3)}%;background:${PCOLORS[i]}" title="P${i+1} ${v.toFixed(1)}%"></div>`).join("");
+  labels.innerHTML=pct.map((v,i)=>`<div class="wmlabel" style="color:${PCOLORS[i]}"><span>P${i+1}</span><b>${v.toFixed(1)}%</b></div>`).join("");
+}
+
+function toggleWinMeter(){ winMeterOn=!winMeterOn; updateWinMeter(); }
 
 function updateStatus(activeSeat){
   let phase="";
@@ -710,6 +732,7 @@ function showReplayTurn(){
     gn.oninput = ()=>{ gameNote = gn.value; }; }
   _markNoted();
   render();
+  updateWinMeter();
 }
 // コメントの付いたターンが一目で分かるようにカウンタへ印を出す
 function _markNoted(){
@@ -736,7 +759,7 @@ function toggleRvPlay(){
   },900);
   updateRvButtons();
 }
-function exitReplayU(){ stopRvPlay(); exitReplay(); document.body.classList.remove("replaying"); if(game) render(); else $("startScreen").classList.remove("hidden"); }
+function exitReplayU(){ stopRvPlay(); exitReplay(); document.body.classList.remove("replaying"); if(game){ render(); updateWinMeter(); } else $("startScreen").classList.remove("hidden"); }
 function updateRvButtons(){
   $("rvPrev").textContent=t("rv_prev"); $("rvNext").textContent=t("rv_next"); $("rvExit").textContent=t("rv_close");
   $("rvPlay").textContent = rvPlayTimer ? t("rv_stop") : t("rv_auto");
@@ -1110,7 +1133,7 @@ function wireControls(){
   $("tradeBtnU").onclick = ()=>{ if(guardTurn()){ doTrade(); afterHuman(); } };
   $("endTurnU").onclick  = ()=>{ if(guardTurn()){ endTurnGame(); afterHuman(); } };
 
-  $("pauseBtn").onclick=togglePause; $("evalBtn").onclick=toggleEval;
+  $("pauseBtn").onclick=togglePause; $("evalBtn").onclick=toggleEval; $("winMeterBtn").onclick=toggleWinMeter;
   $("newBtn").onclick=newMatch; $("replayBtn").onclick=startReplay; $("exportBtn").onclick=exportRecord;
   { const _lb=$("loadBtn"); if(_lb) _lb.onclick=loadRecord;
     const _slb=$("startLoadBtn"); if(_slb) _slb.onclick=loadRecord;

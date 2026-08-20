@@ -250,8 +250,9 @@ function checkWin(){
   if(vpOf(p)>=game.vpToWin){
     // 勝利ターンを棋譜に残す。勝利は建設途中に確定しendTurnGameが走らないため、
     // ここで snapshotTurn しないと「勝者が10点に到達した決定的な最終ターン」が丸ごと欠落する。
+    game.phase="over";   // 最終コマの勝率を勝者100%として保存してから棋譜化
     try{ snapshotTurn(); }catch(e){}
-    game.phase="over"; toast(`🏆 P${p} が ${vpOf(p)}点で勝利！`);
+    toast(`🏆 P${p} が ${vpOf(p)}点で勝利！`);
   }
 }
 
@@ -383,9 +384,10 @@ function snapshotTurn(){
   const tn = game.turns.filter(t=>!t.setup).length + 1;   // 初期配置のコマは番号に数えない
   const title = `ターン ${tn}`;
   const note = String(game._liveNote||"").trim();
+  let winProb=null; try{ winProb=estimateWinProbabilities(); }catch(e){}
   game.turns.push({sett, city, road, robber:game.robber, dice:game.dice, player:cur(),
                    title, hands:_snapHands(), events: lastMsgs.length?lastMsgs:["（このターンの動きなし）"],
-                   actions:(game._acts||[]), ...(note?{note}: {})});
+                   actions:(game._acts||[]), ...(note?{note}: {}), ...(winProb?{winProb}: {})});
   game._liveNote="";
   game._acts=[];   // 次ターン用にリセット
 }
@@ -410,10 +412,11 @@ function _snapSetupStep(sp, what){
     for(const e of placements[p].roads) road[e]=p;
   }
   const n = game.turns.filter(t=>t.setup).length + 1;
+  let winProb=null; try{ winProb=estimateWinProbabilities(); }catch(e){}
   game.turns.push({setup:true, sett, city, road, robber:game.robber, dice:null, player:sp,
                    title:`初期配置 ${n}／${numPlayers*4}　P${sp} が${what}`,
                    hands:_snapHands(),
-                   events:[`P${sp} が${what}を置いた`], actions:(game._acts||[])});
+                   events:[`P${sp} が${what}を置いた`], actions:(game._acts||[]), ...(winProb?{winProb}: {})});
   game._logMark = game.log.length; game._acts=[];
 }
 
@@ -1353,6 +1356,32 @@ function stateFeat(p){
   return [bvp, vp, c, s, pp.tot, pp.ow, pp.wb, pp.sh, port, army, lr, hand, dev, oppVP, oppProd, vp-oppVP, rc,
           owMin, myTurns, oppMinTurns, rivalNO, portSyn, robbedOW];
 }
+
+// 将棋の評価値ゲージに相当する4人勝率。V_humanを各席へ適用し、合計100%へ正規化する。
+// 非公開手札も含む内部状態ベースの参考値。終局だけは実際の勝者を100%に固定する。
+function estimateWinProbabilities(){
+  const out={};
+  if(!game) return out;
+  if(game.phase==="over"){
+    let w=1,b=-Infinity;
+    for(const q of game.order){ const v=vpOf(q); if(v>b){b=v;w=q;} }
+    for(const q of game.order) out[q]=(q===w?1:0);
+    return out;
+  }
+  let sum=0;
+  for(const q of game.order){
+    let v=0.25; try{ v=_valScore(stateFeat(q)); }catch(e){}
+    v=Math.max(0.0001,Math.min(0.9999,v)); out[q]=v; sum+=v;
+  }
+  if(sum<=0){ for(const q of game.order) out[q]=1/game.order.length; }
+  else for(const q of game.order) out[q]/=sum;
+  // AUCは順位性能であり確率校正ではない。序盤の過信を防ぎ、進行に応じて25%からモデル値へ寄せる。
+  const maxVP=Math.max(...game.order.map(q=>vpOf(q))), rc=game.rollCount||0;
+  const confidence=Math.max(0.08,Math.min(0.95, Math.max(0,maxVP-2)/7*0.75 + Math.min(1,rc/120)*0.25));
+  for(const q of game.order) out[q]=0.25*(1-confidence)+out[q]*confidence;
+  return out;
+}
+
 function _mainBuildCands(p){
   const cands=[]; const adv=computeAdvice();
   const ci=adv.find(a=>a.label.startsWith("都市化")&&a.target&&a.target.id!=null);
