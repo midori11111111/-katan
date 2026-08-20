@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>カタン 挑戦者AI 対局</title>
-<link rel="stylesheet" href="css/styles.css?v=20260819b">
+<link rel="stylesheet" href="css/styles.css?v=20260820a">
 </head>
 <body data-mode="pc" data-lang="ja">
 
@@ -166,6 +166,14 @@
         </div>
         <button id="endTurnU" class="btn good" disabled data-i18n="act_endturn">ターン終了</button>
       </div>
+      <div id="liveNoteBox">
+        <div class="liveNoteHead">
+          <label for="liveTurnNote">棋譜コメント</label>
+          <span id="liveNoteTarget">現在のターンに保存</span>
+        </div>
+        <textarea id="liveTurnNote" rows="2" placeholder="このターンの判断や気づきを入力（ターン終了時に棋譜へ自動保存）"></textarea>
+        <div id="liveNoteStatus">未入力</div>
+      </div>
       <div class="prompt" id="prompt" style="display:none"></div>
     </div>
   </div>
@@ -204,7 +212,7 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="js/engine.js?v=20260819b"></script>
-<script src="js/app.js?v=20260819b"></script>
+<script src="js/engine.js?v=20260820a"></script>
+<script src="js/app.js?v=20260820a"></script>
 </body>
 </html>

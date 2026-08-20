@@ -382,9 +382,11 @@ function snapshotTurn(){
   game._logMark = game.log.length;
   const tn = game.turns.filter(t=>!t.setup).length + 1;   // 初期配置のコマは番号に数えない
   const title = `ターン ${tn}`;
+  const note = String(game._liveNote||"").trim();
   game.turns.push({sett, city, road, robber:game.robber, dice:game.dice, player:cur(),
                    title, hands:_snapHands(), events: lastMsgs.length?lastMsgs:["（このターンの動きなし）"],
-                   actions:(game._acts||[])});
+                   actions:(game._acts||[]), ...(note?{note}: {})});
+  game._liveNote="";
   game._acts=[];   // 次ターン用にリセット
 }
 // 各プレイヤーの手札・発展カード・VPを棋譜に残す（棋譜で手札を確認できるように）

@@ -216,6 +216,16 @@ body[data-mode="mobile"] #gameLog{min-height:120px}
 .trade .arw{color:var(--muted)}
 .prompt{margin-top:9px; background:#20242b; border:1px solid var(--line); border-radius:10px; padding:8px 11px; font-size:12.5px}
 .prompt.hot{border-color:var(--gold); background:#2a2616}
+#liveNoteBox{margin-top:9px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--panel2)}
+.liveNoteHead{display:flex; align-items:center; gap:8px; margin-bottom:5px}
+.liveNoteHead label{font-size:12px; font-weight:800; color:var(--gold)}
+#liveNoteTarget{margin-left:auto; color:var(--muted); font-size:10.5px}
+#liveTurnNote{display:block; width:100%; box-sizing:border-box; resize:vertical; min-height:42px; max-height:110px;
+  border:1px solid var(--line); border-radius:8px; padding:6px 8px; background:#171b21; color:var(--text); font:12.5px inherit}
+#liveTurnNote:focus{outline:none; border-color:var(--gold)}
+#liveNoteStatus{text-align:right; margin-top:3px; color:var(--muted); font-size:10.5px}
+#liveNoteStatus.saved{color:var(--gold)}
+body.replaying #liveNoteBox{display:none}
 body[data-mode="mobile"] .actions .btn{padding:6px 9px; font-size:12px}
 body[data-mode="mobile"] .rescard{width:50px}
 body[data-mode="mobile"] .rescard .cnt{font-size:16px}

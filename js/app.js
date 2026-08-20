@@ -435,6 +435,7 @@ function updateGamePanel(){
   renderBank();
   renderOpponents(activeSeat);
   updateEval();
+  updateLiveNoteUI();
   if(game.phase==="over") onGameOver();
 }
 
@@ -499,6 +500,31 @@ function renderHand(){
     if(discarding) c.onclick=()=>humanDiscard(r);
     box.appendChild(c);
   }
+}
+
+// 試合中に書いたメモを、現在進行中のターンの棋譜コマへ添付する。
+// snapshotTurn() が確定保存して空にするため、次ターンへ誤って持ち越さない。
+function updateLiveNoteUI(){
+  const box=$("liveNoteBox"), input=$("liveTurnNote"), target=$("liveNoteTarget"), status=$("liveNoteStatus");
+  if(!box || !input) return;
+  const active=!!(game && game.phase!=="setup" && game.phase!=="over" && !(replay&&replay.active));
+  box.style.display=active?"block":"none";
+  if(!active) return;
+  const p=cur();
+  const tn=game.turns.filter(x=>!x.setup).length+1;
+  target.textContent=`ターン ${tn}・P${p} に保存`;
+  const val=String(game._liveNote||"");
+  if(input.value!==val) input.value=val;
+  input.oninput=()=>{
+    if(!game) return;
+    game._liveNote=input.value;
+    const has=input.value.trim().length>0;
+    status.textContent=has?"入力済み・ターン終了時に自動保存":"未入力";
+    status.classList.toggle("saved",has);
+  };
+  const has=val.trim().length>0;
+  status.textContent=has?"入力済み・ターン終了時に自動保存":"未入力";
+  status.classList.toggle("saved",has);
 }
 function humanDiscard(r){
   const d=game.discardQueue[0];
