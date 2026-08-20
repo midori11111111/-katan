@@ -4066,16 +4066,13 @@ function render(){
       s.textContent="★おすすめ"; SVG.appendChild(s);
     }
   }
-  // 対局中の盗賊を表示
-  if(game && game.robber!=null){
-    const h=GEO.hexes[game.robber];
-    if(h) SVG.appendChild(el("circle",{cx:TX(h.cx),cy:TY(h.cy),r:10,fill:"#111418",stroke:"#e6bd4a","stroke-width":2,opacity:.95,"pointer-events":"none"}));
-  }
-  // リプレイ中は泥棒を表示
+  // 盗賊は必ず1体だけ描画する。リプレイ中は最終局面の game.robber ではなく現在コマを優先。
   const _rpR=curReplay();
-  if(_rpR && _rpR.robber!=null){
-    const h=GEO.hexes[_rpR.robber];
-    if(h) SVG.appendChild(el("circle",{cx:TX(h.cx),cy:TY(h.cy),r:9,fill:"#111418",stroke:"#e6bd4a","stroke-width":1.5,opacity:.92,"pointer-events":"none"}));
+  const _robberHex = (_rpR && _rpR.robber!=null) ? _rpR.robber
+                   : (game && game.robber!=null ? game.robber : null);
+  if(_robberHex!=null){
+    const h=GEO.hexes[_robberHex];
+    if(h) SVG.appendChild(el("circle",{cx:TX(h.cx),cy:TY(h.cy),r:10,fill:"#111418",stroke:"#e6bd4a","stroke-width":2,opacity:.95,"pointer-events":"none","data-piece":"robber"}));
   }
 
   // 港ツールのとき、置ける海岸線をうっすら表示
