@@ -105,7 +105,7 @@ body[data-mode="mobile"] svg#board{width:100%; height:auto; max-height:40vh; max
 .vlabel{font-size:8px; fill:var(--faint); text-anchor:middle; dominant-baseline:central; pointer-events:none}
 
 /* ---------- パネル領域 ---------- */
-#panelRegion{grid-area:panels; min-height:0; min-width:0; display:flex; flex-direction:column; gap:6px; overflow:hidden}
+#panelRegion{grid-area:panels; min-height:0; min-width:0; display:flex; flex-direction:column; gap:6px; overflow-y:auto; overscroll-behavior:contain}
 .tabbar{display:none; gap:6px}
 .tabbtn{flex:1; border:1px solid var(--line); background:var(--panel2); color:var(--muted); border-radius:9px; padding:8px 3px; font-size:12px; font-weight:700; cursor:pointer}
 .tabbtn.on{border-color:var(--gold); color:#fff; box-shadow:0 0 0 1px var(--gold) inset}
@@ -336,6 +336,20 @@ body[data-mode="mobile"] .topbar{
   flex-wrap:nowrap; overflow:visible; gap:8px;
   padding:calc(6px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) 6px calc(10px + env(safe-area-inset-left));
 }
+
+/* 盤面・タブ・手札を固定高へ押し込めず、ページとして縦に辿れるようにする。 */
+body[data-mode="mobile"]{height:auto; min-height:100vh; min-height:100dvh; overflow-y:auto; display:block}
+body[data-mode="mobile"] .appmain{
+  grid-template-rows:auto minmax(260px,42dvh) auto;
+  min-height:0; overflow:visible; align-content:start;
+}
+body[data-mode="mobile"] #panelRegion{min-height:260px; height:42dvh; overflow:hidden}
+body[data-mode="mobile"] #handRegion{min-height:max-content}
+
+/* PC右カラムは状況・ログ・銀行・相手を含む一覧全体をスクロール可能にする。 */
+body[data-mode="pc"] #panelRegion{overflow-y:auto; padding-right:3px; scrollbar-gutter:stable}
+#panelRegion::-webkit-scrollbar{width:9px}
+#panelRegion::-webkit-scrollbar-thumb{background:var(--line); border-radius:5px}
 body[data-mode="mobile"] .brand{display:none}
 body[data-mode="mobile"] .topbar .spacer{display:none}
 body[data-mode="mobile"] .ctrl{flex:1; flex-wrap:nowrap; gap:6px; min-width:0}
