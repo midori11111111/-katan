@@ -1031,8 +1031,7 @@ const TUNE_GROUPS = [
     rows:[
       {ja:"VP",en:"VP",min:0,max:3,step:0.05,def:1.0,get:()=>THREAT_W.vp,set:v=>THREAT_W.vp=v},
       {ja:"生産力",en:"Production",min:0,max:1,step:0.02,def:0.10,get:()=>THREAT_W.pip,set:v=>THREAT_W.pip=v},
-      {ja:"購入カード",en:"Dev bought",min:0,max:3,step:0.05,def:0.6,get:()=>THREAT_W.dev,set:v=>THREAT_W.dev=v},
-      {ja:"騎士",en:"Knights",min:0,max:3,step:0.05,def:0.8,get:()=>THREAT_W.knight,set:v=>THREAT_W.knight=v},
+      {ja:"騎士賞の見込み点",en:"Expected largest-army VP",min:0,max:3,step:0.05,def:1.0,get:()=>THREAT_W.knight,set:v=>THREAT_W.knight=v},
     ]},
   { title:["道・妨害","Roads & disruption"],
     rows:[
@@ -1086,7 +1085,7 @@ BEST_W.resFactor={ore:${BEST_W.resFactor.ore}, wheat:${BEST_W.resFactor.wheat}, 
 BEST_W.diversity=${BEST_W.diversity}; BEST_W.portBase=${BEST_W.portBase}; BEST_W.portMatch=${BEST_W.portMatch}; BEST_W.sameNumber=${BEST_W.sameNumber};
 MODEL_BLEND=${MODEL_BLEND};
 W_CITY=${W_CITY}; W_SETTLE=${W_SETTLE}; W_ROAD=${W_ROAD};
-THREAT_W={vp:${THREAT_W.vp}, pip:${THREAT_W.pip}, city:0, dev:${THREAT_W.dev}, knight:${THREAT_W.knight}};
+THREAT_W={vp:${THREAT_W.vp}, pip:${THREAT_W.pip}, city:0, dev:0, knight:${THREAT_W.knight}};
 DANGER_VP=${DANGER_VP}; CONSERVE_ROADS=${CONSERVE_ROADS};`;
   if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(s).then(()=>toast(LANG==="en"?"Copied to clipboard":"クリップボードにコピーしました"), ()=>_tuneShowText(s)); }
   else _tuneShowText(s);

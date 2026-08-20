@@ -2361,11 +2361,13 @@ let USE_GBM=false;   // [2026-08-19] USE_GBM=true だと vertexModelScore が gb
                      //  実測 +5.8pt(SEED=71) / +6.8pt(SEED=101)（40盤面・各6000試合・対照つき）
 const ROBBER_MODEL={"feature_names": ["pip", "maxVpTouched", "sumWeightedPip", "selfTouched", "numOwners", "diceCount", "is_ore", "is_wheat", "is_sheep", "is_wood", "is_brick"], "mean": [3.9588766883684774, 4.604353318433582, 10.628581608525248, 0.07820425614614712, 1.7736533540634212, 44.962141677193664, 0.30641013183040194, 0.39724678521685614, 0.10144786706831212, 0.10288601690797784, 0.0791954134680789], "scale": [1.163394402844868, 2.409477011293381, 6.266551935784059, 0.26849273820093317, 0.7867552923698771, 25.33105352918398, 0.46100212899972043, 0.48932788276539185, 0.3019208461424599, 0.30380994788286375, 0.2700435149261598], "coef": [0.11951118221174424, -0.5562694803798628, -0.15672487677173366, -0.055394932983823926, 0.20306044716106517, 0.48439133193067957, 0.16193125883205328, 0.21195243937940772, 0.09540894632488735, 0.11428222499031938, 0.09895558184365694], "intercept": -0.8916678856737725, "auc": 0.6035114826851945, "n_events": 181606};
 let USE_ROBBER_MODEL=false;   // 検証済み: AUC0.6035は確認したが実戦(4000試合)では24.35%と中立〜微減。デフォルトOFF。
-let USE_THREAT=true;   // 盗賊の標的を「表面VP」ではなく「脅威度」で選ぶ（カード購入数・騎士数・生産力を加味）
+let USE_THREAT=true;   // 盗賊の標的を「表面VP」ではなく「脅威度」で選ぶ（生産力・騎士賞見込み点を加味）
 // 検証: カード多用の人間型ボット相手に、相手の勝率を23.8%→21.5% / 22.5%→21.9% に抑制（計5000試合で一貫）
 // 脅威度の重み（すべて公開情報のみ）
 // city は旧設定との互換用に残すが既定0。都市の2倍産出は pip に既に含まれるため独立加点しない。
-let THREAT_W={ vp:1.0, pip:0.10, city:0, dev:0.6, knight:0.8 };
+// city/dev は旧設定との互換用。都市数は生産力と二重、dev.boughtは当該ターンだけの一時値なので評価しない。
+let THREAT_W={ vp:1.0, pip:0.10, city:0, dev:0, knight:1.0 };
+let LA_RACE_ROLLS=18;   // 騎士賞レースで先読みする共通ダイス数（全員同条件）
    // true=勾配ブースティング(木ベース), false=線形回帰
 let useModel=true;   // false=手書き戦略, true=学習モデル（学習単体AIと同じブレンド式）
 let MODEL_BLEND=0.75;   // 頂点評価の合成比: 0=手書きBEST_Wのみ / 1=学習モデルのみ（既定0.75。サイトの調整バーで可変）
@@ -3668,11 +3670,41 @@ function robberModelScore(hexId, actP){
   x.forEach((v,i)=>{ z += ROBBER_MODEL.coef[i]*((v-ROBBER_MODEL.mean[i])/ROBBER_MODEL.scale[i]); });
   return 1/(1+Math.exp(-z));
 }
+// 鉄麦羊の継続産出から、1ダイスあたり何枚の発展カードを買えるかを推定する。
+// 余剰資源は所有港の2:1/3:1（無ければ4:1）で不足資源へ変換できるものとして計算。
+function devProductionRate(q){
+  const prod=production(q), need=["sheep","wheat","ore"];
+  let lo=0, hi=Math.max(0.001, RES5.reduce((s,r)=>s+prod[r],0));
+  for(let i=0;i<28;i++){
+    const x=(lo+hi)/2;
+    let deficit=0, convertible=0;
+    for(const r of need) deficit+=Math.max(0,x-(prod[r]||0));
+    for(const r of RES5) convertible+=Math.max(0,(prod[r]||0)-x*(need.includes(r)?1:0))/rateFor(q,r);
+    if(convertible+1e-12>=deficit) lo=x; else hi=x;
+  }
+  return lo;
+}
+
+// 全員の「使用済み騎士＋今後の騎士供給力」を相対化し、騎士賞の2点を見込み点として分配。
+// 戦力 = 使用済み騎士 + 18ダイス分のカード購入力×騎士率(14/25)。確率の総和=1、見込み点の総和=2。
+function largestArmyOutlook(){
+  const raw={}, devRate={}; let sum=0;
+  for(const q of game.order){
+    devRate[q]=devProductionRate(q);
+    const used=(game.army&&game.army[q])||0;
+    raw[q]=Math.max(0.05, used + LA_RACE_ROLLS*devRate[q]*(14/25));
+    sum+=raw[q];
+  }
+  const chance={}, expectedPoints={};
+  for(const q of game.order){ chance[q]=raw[q]/sum; expectedPoints[q]=2*chance[q]; }
+  return {chance,expectedPoints,raw,devRate};
+}
+
 // 脅威度: 「表面VPが高い相手」ではなく「本当に勝ちに近い相手」を測る。
 // 実データ分析の発見: 人間の強者はカードを大量に買い(VPを隠し)、騎士で盗賊を捌くため、
 // 表面VPだけ見ているAIからは脅威に見えず、放置される（実測: AIが人間を狙ったのは26%＝ランダム以下）。
 // ここでは「対戦相手から実際に見える情報」だけを使う（手札の中身は覗かない＝カンニングしない）。
-function threatOf(q){
+function threatOf(q, laOutlook){
   let t = vpOf(q) * THREAT_W.vp;
   // 生産力: 建物が接するタイルのpip合計（都市は2倍）
   let pip=0;
@@ -3686,23 +3718,20 @@ function threatOf(q){
     }
   }
   t += pip * THREAT_W.pip;
-  // カード購入枚数（公開情報。VPカードを隠し持っている可能性＝見えないVP）
-  const devBought = game.dev && game.dev.bought && game.dev.bought[q]
-    ? Object.values(game.dev.bought[q]).reduce((a,b)=>a+b,0) : 0;
-  t += devBought * THREAT_W.dev;
-  // 騎士の使用回数（公開情報。騎士賞に近い＝2点が乗る）
-  const knights = (game.army && game.army[q]) ? game.army[q] : 0;
-  t += knights * THREAT_W.knight;
+  // 騎士賞の見込み2点。単純な使用騎士数ではなく、全員の騎士数・鉄麦羊・港変換力の相対値。
+  const la=laOutlook||largestArmyOutlook();
+  t += la.expectedPoints[q] * THREAT_W.knight;
   return t;
 }
 // 盗む相手が複数いる時は、脅威度(threatOf)の高い方を選ぶ。
-// 脅威度はVP・生産力・都市・購入カード・騎士から毎ターン動的に計算されるので、
+// 脅威度はVP・生産力・騎士賞見込み点から毎ターン動的に計算されるので、
 // 試合開始〜終盤で狙う相手が状況に応じて変わる（従来は常にstealCands[0]で固定だった）。
 function bestStealTarget(cands){
   if(!cands || !cands.length) return null;
   if(cands.length===1) return cands[0];
-  let best=cands[0], bt=-Infinity;
-  for(const q of cands){ let tv; try{ tv=threatOf(q); }catch(e){ tv=vpOf(q); } if(tv>bt){ bt=tv; best=q; } }
+  let best=cands[0], bt=-Infinity, la=null;
+  try{ la=largestArmyOutlook(); }catch(e){}
+  for(const q of cands){ let tv; try{ tv=threatOf(q,la); }catch(e){ tv=vpOf(q); } if(tv>bt){ bt=tv; best=q; } }
   return best;
 }
 // あるタイルに、指定プレイヤーの「都市」が接しているか
@@ -3786,7 +3815,8 @@ function robberAdviceDelay(me){
   const saved=game.robber;
   const opp=game.order.filter(q=>q!==me);
   const cost={}, base={};
-  const maxTh=Math.max(1, ...opp.map(q=>{ try{return threatOf(q);}catch(e){return 1;} }));
+  let baseLA=null; try{ baseLA=largestArmyOutlook(); }catch(e){}
+  const maxTh=Math.max(1, ...opp.map(q=>{ try{return threatOf(q,baseLA);}catch(e){return 1;} }));
   for(const q of opp){ const nb=_nextBuildCostRD(q); cost[q]=nb.cost; base[q]=nb.turns; }
   const myNb=_nextBuildCostRD(me), myBase=myNb.turns;
   let best=null, fallback=null;
@@ -3794,13 +3824,14 @@ function robberAdviceDelay(me){
     if(hx.id===saved) continue;
     const b=board[hx.id]; if(!b||!b.number||!b.resource||b.resource==="desert") continue;
     game.robber=hx.id;
+    let candidateLA=null; try{ candidateLA=largestArmyOutlook(); }catch(e){}
     let score=0, hitsOpp=false, hitsMe=false;
     for(const q of opp){
       if(!_hexHasBuildingOf(hx.id,q)) continue;
       hitsOpp=true;
       const delta=Math.max(0, turnsToAfford(q,cost[q]) - base[q]);
       const imminence=1/(1+base[q]);                 // 早い建設ほど重い
-      const threatW=0.5+0.5*(threatOf(q)/maxTh);     // 脅威の高い相手ほど重い
+      const threatW=0.5+0.5*(threatOf(q,candidateLA)/maxTh); // 脅威の高い相手ほど重い
       score += delta*imminence*threatW;
     }
     if(_hexHasBuildingOf(hx.id,me)){
@@ -3816,7 +3847,7 @@ function robberAdviceDelay(me){
   const pick = best || fallback;
   if(pick){   // 奪う相手は同タイル上の最脅威者
     let tp=null, tv=-Infinity;
-    for(const q of opp){ if(_hexHasBuildingOf(pick.hid,q)){ let t; try{t=threatOf(q);}catch(e){t=vpOf(q);} if(t>tv){ tv=t; tp=q; } } }
+    for(const q of opp){ if(_hexHasBuildingOf(pick.hid,q)){ let t; try{t=threatOf(q,baseLA);}catch(e){t=vpOf(q);} if(t>tv){ tv=t; tp=q; } } }
     pick.top=tp;
   }
   return pick;
@@ -3833,9 +3864,10 @@ function robberAdvice(){
     return t;
   };
   if(typeof USE_THREAT!=="undefined" && USE_THREAT){
+    let la=null; try{ la=largestArmyOutlook(); }catch(e){}
     let bestT=-Infinity;
     for(const q of game.order){ if(q===cur()) continue;
-      const t=_threatAdj(q, threatOf(q)); if(t>bestT){ bestT=t; top=q; } }
+      const t=_threatAdj(q, threatOf(q,la)); if(t>bestT){ bestT=t; top=q; } }
   }else{
     // 表面VP方式でも、人間は少し優先（VP同点なら人間を狙う）
     let bestV=-Infinity;
