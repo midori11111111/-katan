@@ -3830,6 +3830,10 @@ function robberAdviceSmart(top){
 //  各候補ヘクスへ盗賊を仮置きし、相手の次建設のturnsToAfford増分（遅延）を、
 //  「今すぐ建ちそう」なほど重く(imminence)・脅威の高い相手ほど重く(threatW)加点。自分を止める分は減点。
 let ROBBER_DELAY=true;
+// [2026-08-24] 10万試合で採用した最強AI専用盗賊。
+// 先に「10点へ最も近い相手」を決め、騎士賞見込み込みでその相手の行動確率を最大限落とす。
+// app.js が最強AI/無敵AIの手番だけ true にする。falseなら従来の遅延盗賊へ完全非回帰。
+let ROBBER_RP_ARMY=false;
 function _nextBuildCostRD(q){
   const nc=(placements[q].cities?placements[q].cities.size:0), ns=placements[q].settlements.size;
   const cands=[];
@@ -3881,7 +3885,159 @@ function robberAdviceDelay(me){
   }
   return pick;
 }
+
+// 相手から見える伏せカード枚数。カードの種類は使わない。
+function _rpHeldDevCount(q){
+  try{ const h=game.dev.hands[q]; return h?Object.values(h).reduce((a,b)=>a+b,0):0; }
+  catch(e){ return 0; }
+}
+function _rpVisibleVP(q){
+  let v=placements[q].settlements.size+2*(placements[q].cities?placements[q].cities.size:0);
+  if(game.lr.holder===q)v+=2;
+  if(game.la.holder===q)v+=2;
+  return v;
+}
+
+// 都市・家・カードを別行動として評価する。同じ1ターン遅延でも価値を同一にしない。
+function _rpBuildOptions(q){
+  const out=[];
+  if(placements[q].settlements.size&&placements[q].cities.size<4){
+    let bestPip=0;
+    for(const v of placements[q].settlements){
+      let pp=0;
+      for(const hid of (GEO.vertex_hexes[String(v)]||[])){ const b=board[hid]; if(b&&b.number)pp+=pipOf(b.number); }
+      bestPip=Math.max(bestPip,pp);
+    }
+    const first=placements[q].cities.size===0;
+    out.push({kind:"city",cost:COST.city,impact:(first?2.4:1.35)+bestPip/5});
+  }
+  if(placements[q].settlements.size+placements[q].cities.size<7){
+    let bp=0;
+    try{
+      for(const vx of GEO.vertices){ const v=vx.id;
+        if(occupantOf(v)||(GEO.vertex_neighbors[String(v)]||[]).some(n=>occupantOf(n)))continue;
+        if(!GEO.edges.some(e=>(e.a===v||e.b===v)&&placements[q].roads.has(e.id)))continue;
+        let pp=0;for(const hid of (GEO.vertex_hexes[String(v)]||[])){const b=board[hid];if(b&&b.number)pp+=pipOf(b.number);}
+        bp=Math.max(bp,pp);
+      }
+    }catch(e){}
+    out.push({kind:"settle",cost:COST.settlement,impact:1.1+bp/6});
+  }
+  if(game.dev&&game.dev.deck&&game.dev.deck.length){
+    const armyGap=Math.max(0,3-(game.army[q]||0));
+    out.push({kind:"dev",cost:COST.dev,impact:0.65+(armyGap<=2?0.35:0)});
+  }
+  return out;
+}
+
+// 使用済み騎士＋伏せ札期待＋鉄麦羊/港の12投カード供給力を相対化する。
+function _rpArmyShareVector(){
+  const raw={},target=game.la.holder?game.la.count+1:3,kd=14/25;let z=0;
+  for(const q of game.order){
+    const used=(game.army&&game.army[q])||0,held=_rpHeldDevCount(q);
+    let pr={wood:0,brick:0,sheep:0,wheat:0,ore:0};try{pr=production(q);}catch(e){}
+    const base=Math.min(pr.sheep||0,pr.wheat||0,pr.ore||0);
+    let credit=0;for(const r of RES5)credit+=Math.max(0,(pr[r]||0)-base)/Math.max(2,rateFor(q,r));
+    const cardRate=base+credit/3;
+    const future=Math.min(2.0,12*cardRate)*kd;
+    const strength=used+held*kd+future;
+    let x=Math.exp(1.15*(strength-target));
+    if(game.la.holder===q)x*=1.35;
+    raw[q]=x;z+=x;
+  }
+  const out={};for(const q of game.order)out[q]=(raw[q]||0)/(z||1);return out;
+}
+
+// 10点までの公開近似ETAを主軸に、騎士賞見込みと生産力で対象者を決める。
+function _rpRouteThreatVector(army){
+  const out={};
+  for(const q of game.order){
+    let eta=80;
+    const hand=game.dev&&game.dev.hands&&game.dev.hands[q];
+    const oldVp=hand?hand.vp:0;
+    try{ if(hand)hand.vp=0;const b=backSolve(q);if(b&&isFinite(b.turns))eta=b.turns; }
+    catch(e){}
+    finally{ if(hand)hand.vp=oldVp; }
+    let pip=0;try{pip=Object.values(production(q)).reduce((a,b)=>a+b,0)*36;}catch(e){}
+    const expectedVP=_rpVisibleVP(q)+2*(army[q]||0)+_rpHeldDevCount(q)*(5/25);
+    out[q]=Math.exp(-Math.min(120,eta)/24)*(1+0.10*expectedVP)+0.0015*pip;
+  }
+  return out;
+}
+
+// 同じ産出分布から、8/12投以内に都市・家・カードが成立する確率を同時に求める。
+function _rpActionProbs(q,actions,horizons){
+  if(!actions.length)return null;
+  const RESA=["wood","brick","sheep","wheat","ore"],rates={};for(const r of RESA)rates[r]=rateFor(q,r);
+  const hand=game.hands[q]||{},capSets=(typeof MS_CAPSETS!=="undefined"?MS_CAPSETS:1);
+  const caps=RESA.map(r=>Math.max(0,...actions.map(a=>(a.cost[r]||0)))+(rates[r]||4)*capSets);
+  const sizes=caps.map(c=>c+1),N=sizes.reduce((a,b)=>a*b,1);if(N>200000)return null;
+  const stride=new Array(5);stride[4]=1;for(let i=3;i>=0;i--)stride[i]=stride[i+1]*sizes[i+1];
+  const feas=actions.map(()=>new Uint8Array(N)),cnt=[0,0,0,0,0];
+  for(let i=0;i<N;i++){
+    let rem=i;for(let a=0;a<5;a++){cnt[a]=(rem/stride[a])|0;rem-=cnt[a]*stride[a];}
+    for(let k=0;k<actions.length;k++){
+      const nd=actions[k].cost;let def=0,tr=0;
+      for(let a=0;a<5;a++){const need=nd[RESA[a]]||0,c=cnt[a];if(c<need)def+=need-c;else tr+=((c-need)/(rates[RESA[a]]||4))|0;}
+      if(tr>=def)feas[k][i]=1;
+    }
+  }
+  const start=RESA.map((r,a)=>Math.min(hand[r]||0,caps[a]));
+  const s0=start.reduce((z,c,a)=>z+c*stride[a],0),prod=_prodTableFor(q);
+  const PIPN={2:1,3:2,4:3,5:4,6:5,8:5,9:4,10:3,11:2,12:1},outs=[];let pProd=0;
+  for(const d in prod){const g=prod[d];if(!g)continue;const gv=RESA.map(r=>g[r]||0);if(!gv.some(x=>x>0))continue;
+    const pr=(PIPN[d]||0)/36;if(pr<=0)continue;pProd+=pr;const map=new Int32Array(N);
+    for(let i=0;i<N;i++){let rem=i,j=0;for(let a=0;a<5;a++){let c=(rem/stride[a])|0;rem-=c*stride[a];c=Math.min(caps[a],c+gv[a]);j+=c*stride[a];}map[i]=j;}
+    outs.push({pr,map});
+  }
+  const want=new Set(horizons),out={};let P=new Float64Array(N);P[s0]=1;const pNo=Math.max(0,1-pProd);
+  for(let t=1;t<=Math.max(...horizons);t++){
+    const Q=new Float64Array(N);
+    for(const o of outs){for(let i=0;i<N;i++){const v=P[i];if(v)Q[o.map[i]]+=o.pr*v;}}
+    if(pNo)for(let i=0;i<N;i++)if(P[i])Q[i]+=pNo*P[i];P=Q;
+    if(want.has(t))out[t]=feas.map(f=>{let s=0;for(let i=0;i<N;i++)if(f[i])s+=P[i];return Math.min(1,s);});
+  }
+  return out;
+}
+
+function _rpDamage(q,opts,before,after,army){
+  if(!before||!after)return 0;
+  let total=0;
+  for(let k=0;k<opts.length;k++){
+    const drop8=Math.max(0,(before[8][k]||0)-(after[8][k]||0));
+    const drop12=Math.max(0,(before[12][k]||0)-(after[12][k]||0));
+    let impact=opts[k].impact;
+    // 検証済みrpArmyと同じく、カード価値は騎士賞確率に応じて0.25〜2.25へ置換する。
+    if(opts[k].kind==="dev")impact=0.25+2*(army[q]||0);
+    total+=(0.5*drop8+0.5*drop12)*impact;
+  }
+  return total;
+}
+
+function robberAdviceRpArmy(me){
+  const saved=game.robber,opp=game.order.filter(q=>q!==me),horizons=[8,12];
+  const army=_rpArmyShareVector(),route=_rpRouteThreatVector(army),opts={},before={},raw={};let maxU=1;
+  for(const q of game.order){opts[q]=_rpBuildOptions(q);before[q]=_rpActionProbs(q,opts[q],horizons);}
+  for(const q of opp){raw[q]=Math.max(0.001,route[q]||0)+(army[q]||0);maxU=Math.max(maxU,raw[q]);}
+  const focus=opp.slice().sort((a,b)=>(raw[b]||0)-(raw[a]||0))[0];
+  const urgency=0.25+0.75*(raw[focus]||0)/maxU;
+  let best=null,fallback=null;
+  for(const hx of GEO.hexes){
+    if(hx.id===saved)continue;
+    const b=board[hx.id];if(!b||!b.number||!b.resource||b.resource==="desert")continue;
+    if(!_hexHasBuildingOf(hx.id,focus))continue;
+    const hitsMe=_hexHasBuildingOf(hx.id,me);game.robber=hx.id;
+    let score=_rpDamage(focus,opts[focus],before[focus],_rpActionProbs(focus,opts[focus],horizons),army)*urgency;
+    if(hitsMe)score-=1.2*_rpDamage(me,opts[me],before[me],_rpActionProbs(me,opts[me],horizons),army);
+    if(b.number===2||b.number===12)score*=0.05;
+    const c={hid:hx.id,sc:score,top:focus,res:b.resource,num:b.number};
+    if(hitsMe){if(!fallback||score>fallback.sc)fallback=c;}else if(!best||score>best.sc)best=c;
+  }
+  game.robber=saved;
+  return best||fallback;
+}
 function robberAdvice(){
+  if(typeof ROBBER_RP_ARMY!=="undefined"&&ROBBER_RP_ARMY){try{const _r=robberAdviceRpArmy(cur());if(_r)return _r;}catch(e){console.warn("rpArmy robber fallback",e);}}
   if(typeof ROBBER_DELAY!=="undefined" && ROBBER_DELAY){ try{ const _r=robberAdviceDelay(cur()); if(_r) return _r; }catch(e){} }
   let top=null;
   // vs AI対戦中か（game.aiがあり、人間席が1つ以上ある）を判定

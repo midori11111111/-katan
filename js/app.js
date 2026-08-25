@@ -311,10 +311,13 @@ function _applyVariant(seat){
       ROAD_PATH_SEATS=one; ROAD_PORT_W=1;
       // 無敵AIだけ本編をロールアウト探索で打つ
       ROLLOUT_SEATS = (k==="invincible") ? one : null;
+      // 10万試合で採用した対象者先決め＋騎士賞見込み盗賊（最強AI/無敵AIのみ）
+      ROBBER_RP_ARMY = true;
     }else{
       ETA_W=0; ETA_SEATS=null; SCARCE_W=0; SCARCE_SEATS=null; LOOK_W=0; LOOK_SEATS=null;
       ROAD_WIN_SEATS=null; TURN_CFG=null; ROLLOUT_SEATS=null;
       ROAD_PATH_SEATS=null; ROAD_PORT_W=0;
+      ROBBER_RP_ARMY=false;
     }
   }catch(e){}
   try{ PORT_SYNERGY = human; }catch(e){}    // 港シナジー（配置スコア）

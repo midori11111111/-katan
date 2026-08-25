@@ -72,8 +72,8 @@ body[data-mode="pc"] .appmain{
 }
 body[data-mode="mobile"] .appmain{
   grid-template-columns:1fr;
-  grid-template-rows:auto minmax(0,1fr) auto;
-  grid-template-areas:"board" "panels" "hand";
+  grid-template-rows:auto auto minmax(0,1fr);
+  grid-template-areas:"board" "hand" "panels";
   gap:8px;
   /* 下端に safe-area を確保: 固定された手札/操作が iOS ホームインジケータに隠れないように */
   padding:8px calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
@@ -340,7 +340,8 @@ body[data-mode="mobile"] .topbar{
 /* 盤面・タブ・手札を固定高へ押し込めず、ページとして縦に辿れるようにする。 */
 body[data-mode="mobile"]{height:auto; min-height:100vh; min-height:100dvh; overflow-y:auto; display:block}
 body[data-mode="mobile"] .appmain{
-  grid-template-rows:auto minmax(260px,42dvh) auto;
+  /* 操作を情報タブより先に置く。390x844では旧順序だとサイコロが y=885 へ押し出されていた。 */
+  grid-template-rows:auto auto minmax(260px,42dvh);
   min-height:0; overflow:visible; align-content:start;
 }
 body[data-mode="mobile"] #panelRegion{min-height:260px; height:42dvh; overflow:hidden}
