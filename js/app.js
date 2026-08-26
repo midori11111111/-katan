@@ -515,7 +515,11 @@ function renderHand(){
   // 自分の手札は常に表示。手番が他者(AI等)なら、その旨を添える。
   const turnNote = (isHuman(me) && cur()!==me && game.phase!=="over")
     ? (LANG==="en"?` · P${cur()} ${seatAiName(cur())}'s turn`:` ・${seatTag(cur())}の番`) : "";
-  if(htEl) htEl.innerHTML = (LANG==="en"?`P${me} — your hand`:`P${me} の手札`) + `<small class="turnnote">${turnNote}</small>`;
+  const ownerName=seatAiName(me);
+  const handOwner = LANG==="en"
+    ? (ownerName===t("ai_you") ? `P${me} — your hand` : `P${me} — ${ownerName}'s hand`)
+    : `P${me} ${ownerName}の手札`;
+  if(htEl) htEl.innerHTML = handOwner + `<small class="turnnote">${turnNote}</small>`;
   box.innerHTML="";
   const discarding = game.phase==="discard" && game.discardQueue[0] && game.discardQueue[0].p===me;
   for(const r of RES5){
@@ -579,7 +583,7 @@ function renderMeStat(){
   const devN=Object.values(game.dev.hands[me]).reduce((a,b)=>a+b,0);
   const vpCard=game.dev.hands[me].vp>0 ? ` <span class="badge">${t("vpcards",{n:game.dev.hands[me].vp})}</span>` : "";
   $("meStat").innerHTML =
-    `<span class="dot" style="background:${PCOLORS[me-1]}"></span>P${me}`
+    `<span class="dot" style="background:${PCOLORS[me-1]}"></span>P${me} <span class="ai">${seatAiName(me)}</span>`
     + `<b class="vpn">${vpOf(me)}</b><small>${t("lbl_vp")}</small>`
     + `<span class="sep">${t("lbl_dev")} <b>${devN}</b></span>`
     + `<span class="sep">${t("lbl_knights")} <b>${game.army[me]}</b></span>`

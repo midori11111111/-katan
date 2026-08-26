@@ -40,6 +40,9 @@ function mpClearSession() {
   Object.assign(MP, { code: "", token: "", seat: 0, host: false, version: 0, room: null, active: false });
   clearTimeout(MP.pollTimer);
 }
+function mpStorageReady() {
+  return Boolean(MP.room && (MP.room.persistent || location.hostname === "127.0.0.1" || location.hostname === "localhost"));
+}
 function mpOpen() {
   document.getElementById("mpOverlay").classList.add("show");
   const fromUrl = new URLSearchParams(location.search).get("room");
@@ -97,9 +100,10 @@ function mpRenderRoom() {
   const count = Object.keys(members).length;
   const start = document.getElementById("mpStart");
   start.hidden = !MP.host || MP.room.status !== "lobby";
-  start.disabled = count !== 3;
+  start.disabled = count !== 3 || !mpStorageReady();
   start.textContent = count === 3 ? "3人＋最強AIで対局開始" : `参加待ち（${count}/3人）`;
   document.getElementById("mpWait").textContent =
+    !mpStorageReady() ? "オンライン同期ストレージの接続待ちです。現在は対局を開始できません" :
     MP.room.status === "playing" ? "対局へ接続しています…" :
     MP.room.status === "finished" ? "対局は終了しました" :
     MP.host ? (count === 3 ? "3人揃いました。対局を開始できます" : `あと${3-count}人に招待URLを送ってください`) : "ホストが開始するまで待っています";
@@ -163,7 +167,7 @@ function mpApply(state) {
   if (MP.host) aiMaybeGo();
 }
 async function mpStart() {
-  if (!MP.host || !MP.room || Object.keys(MP.room.members || {}).length !== 3) return;
+  if (!MP.host || !MP.room || !mpStorageReady() || Object.keys(MP.room.members || {}).length !== 3) return;
   seatKind = { 1: "human", 2: "human", 3: "human", 4: "strong" };
   seatAI = { 1: "human", 2: "human", 3: "human", 4: "strong" };
   humanSeat = MP.seat;
@@ -172,6 +176,8 @@ async function mpStart() {
   MP.active = true;
   document.getElementById("mpOverlay").classList.remove("show");
   document.body.classList.add("multiplayer");
+  render();
+  updateGamePanel();
   await mpPublish(0);
 }
 async function mpPublish(actorSeat) {
@@ -245,6 +251,14 @@ function mpWrapAction(name) {
   try { eval(name + " = wrapped"); } catch (_) {}
 }
 function mpInstallHooks() {
+  const originalSeatAiName = seatAiName;
+  seatAiName = function(p) {
+    if (!MP.active || !MP.room) return originalSeatAiName(p);
+    const seat = Number(p);
+    if (seat === Number(MP.room.aiSeat || 4)) return "最強AI";
+    const member = (MP.room.members || {})[seat];
+    return member && member.name ? member.name : `P${seat}`;
+  };
   const originalIsHuman = isHuman;
   isHuman = p => MP.active ? Number(p) === MP.seat : originalIsHuman(p);
   const originalAiMaybeGo = aiMaybeGo;
