@@ -3,6 +3,8 @@
 .env
 .env.*
 !.env.example
+.agents/skills/upstash-*/
+skills-lock.json
 node_modules
 npm-debug.log*
 
