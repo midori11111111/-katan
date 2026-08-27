@@ -162,7 +162,9 @@ function mpApply(state) {
     document.body.classList.add("multiplayer");
     MP.active = true;
     if (replay) replay.active = false;
-    render(); updateGamePanel();
+    render();
+    if (typeof rerenderLog === "function") rerenderLog();
+    updateGamePanel();
   } finally { MP.applying = false; }
   if (MP.host) aiMaybeGo();
 }

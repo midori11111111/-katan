@@ -241,9 +241,9 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove("show"),1900);
 }
 // ログ（i18n）: game.log には生の日本語を保持し、表示だけ言語に合わせる
-function glog(msg){
+function glog(msg, player){
   if(!game) return;
-  const p=cur();
+  const p=player!=null ? Number(player) : cur();
   game.log.push({t:game.log.length, p, dice:game.dice, msg});
   appendLogLine(p, msg);
 }
@@ -563,6 +563,7 @@ function humanDiscard(r){
   const d=game.discardQueue[0];
   if(!d || !isHuman(d.p) || game.hands[d.p][r]<=0) return;
   game.hands[d.p][r]--; d.need--;
+  glog("手札を1枚捨てた", d.p);   // 捨てた資源の種類は非公開
   if(typeof _recAct==="function") _recAct({a:"discard", p:d.p, res:{[r]:1}});   // 人間の捨て札も棋譜に記録
   if(d.need<=0){ game.discardQueue.shift(); if(!game.discardQueue.length){ game.phase="robber"; toast(t("toast_robber")); } }
   refresh(); aiMaybeGo();
@@ -702,7 +703,7 @@ function onGameOver(){
   if(!_overHandled){
     _overHandled=true; clearTimeout(aiTimer);
     const w=winnerSeat(); winner=w;
-    glog(`🏆 P${w} が ${vpOf(w)}点で勝利！`);
+    if(!game._winLogged) glog(`🏆 P${w} が ${vpOf(w)}点で勝利！`, w);
     toast(t("toast_win",{p:w}));
   }
 }
@@ -735,9 +736,10 @@ function showReplayTurn(){
   const evs=(turn.events&&turn.events.length)?turn.events:[t("rv_no_events")];
   $("rvEvents").innerHTML = evs.map(x=>`<div>${LANG==="en"?jaToEn(x):x}</div>`).join("");
   // このターンへのコメント（棋譜に保存される）
+  const noteOwner=turn._sourceTurn||turn;
   const tn=$("rvTurnNote");
-  if(tn){ tn.value = turn.note || "";
-    tn.oninput = ()=>{ turn.note = tn.value; _markNoted(); }; }
+  if(tn){ tn.value = noteOwner.note || "";
+    tn.oninput = ()=>{ noteOwner.note = tn.value; _markNoted(); }; }
   const gn=$("rvGameNote");
   if(gn){ gn.value = (typeof gameNote!=="undefined" && gameNote) ? gameNote : "";
     gn.oninput = ()=>{ gameNote = gn.value; }; }
@@ -748,14 +750,30 @@ function showReplayTurn(){
 // コメントの付いたターンが一目で分かるようにカウンタへ印を出す
 function _markNoted(){
   if(!replay) return;
-  const n=replay.turns.filter(x=>x.note && x.note.trim()).length;
+  const src=replay.sourceTurns||replay.turns;
+  const n=src.filter(x=>x.note && x.note.trim()).length;
   const c=$("rvCount");
   if(c) c.innerHTML = t("rv_count",{i:replay.idx+1, n:replay.turns.length}) + (n?` <span class="rvnoted">✎${n}</span>`:"");
+}
+function _expandReplayTurns(turns){
+  const out=[];
+  for(const turn of (turns||[])){
+    if(turn.setup || !Array.isArray(turn.steps) || !turn.steps.length){ out.push(turn); continue; }
+    turn.steps.forEach((step,i)=>{
+      const frame=Object.assign({},step,{
+        title:`${turn.title}・行動 ${i+1}/${turn.steps.length}`,
+        note:turn.note||""
+      });
+      Object.defineProperty(frame,"_sourceTurn",{value:turn,enumerable:false});
+      out.push(frame);
+    });
+  }
+  return out;
 }
 function startReplay(){
   if(!game || !game.turns || !game.turns.length){ toast(t("toast_no_record")); return; }
   paused=true; updatePauseBtn(); clearTimeout(aiTimer);
-  replay={turns:game.turns, idx:0, active:true};
+  replay={turns:_expandReplayTurns(game.turns), sourceTurns:game.turns, idx:0, active:true};
   $("replayBar").style.display="block"; document.body.classList.add("replaying");
   showReplayTurn();
 }
@@ -894,7 +912,7 @@ function onLoadFile(ev){
         (d.roads||[]).forEach(e=>placements[p].roads.add(e));
       }
       winner = (data.winner!=null ? data.winner : null);
-      replay = {turns:data.replay, idx:0, active:true};   // engineのグローバルreplayに載せる
+      replay = {turns:_expandReplayTurns(data.replay), sourceTurns:data.replay, idx:0, active:true};   // 新棋譜は行動ごとに再生
       $("startScreen").classList.add("hidden");
       document.body.classList.add("replaying");
       $("replayBar").style.display="block";

@@ -251,6 +251,9 @@ function checkWin(){
     // 勝利ターンを棋譜に残す。勝利は建設途中に確定しendTurnGameが走らないため、
     // ここで snapshotTurn しないと「勝者が10点に到達した決定的な最終ターン」が丸ごと欠落する。
     game.phase="over";   // 最終コマの勝率を勝者100%として保存してから棋譜化
+    glog(`🏆 P${p} が ${vpOf(p)}点で勝利！`, p);
+    _recAct({a:"win", p, vp:vpOf(p)});
+    game._winLogged=true;
     try{ snapshotTurn(); }catch(e){}
     toast(`🏆 P${p} が ${vpOf(p)}点で勝利！`);
   }
@@ -271,7 +274,7 @@ function startGame(fromReplayTurn){
         hands, dev, army, lr:{holder:null,len:0}, la:{holder:null,count:0},
         robber: desert?desert.id:0, dice:null, rolled:false, devPlayed:false,
         freeRoads:0, resume:null, discardQueue:[], stealCands:[], ask:null, ai:null,
-        log:[], turns:[], diceCount:0};
+        log:[], turns:[], diceCount:0, _acts:[], _actionFrames:[], _actionLogMark:0};
   if(fromReplayTurn){
     resetPlacements();
     for(const [vid,pp] of Object.entries(fromReplayTurn.sett)){ if(placements[pp]) placements[pp].settlements.add(Number(vid)); }
@@ -303,9 +306,9 @@ function endGameMode(){
   render();
 }
 // 対戦ログ（誰が何をしたか）。表示と棋譜の両方に使う。
-function glog(msg){
+function glog(msg, player){
   if(!game) return;
-  const p=cur();
+  const p=player!=null ? Number(player) : cur();
   game.log.push({t:game.log.length, p, dice:game.dice, msg});
   if(typeof document==="undefined" || !document.getElementById) return;
   const box=document.getElementById("gameLog");
@@ -368,7 +371,39 @@ function _evalTag(kind, targetId){
   }catch(e){ return ""; }
 }
 
-function _recAct(o){ if(!game) return; if(!game._acts) game._acts=[]; game._acts.push(o); }
+function _actionFrame(actor, events, action){
+  const sett={}, city={}, road={};
+  for(let p=1;p<=numPlayers;p++){
+    for(const v of placements[p].settlements) sett[v]=p;
+    if(placements[p].cities) for(const v of placements[p].cities) city[v]=p;
+    for(const e of placements[p].roads) road[e]=p;
+  }
+  let winProb=null; try{ winProb=estimateWinProbabilities(); }catch(e){}
+  const tn=game.turns.filter(t=>!t.setup).length+1;
+  const sn=(game._actionFrames||[]).length+1;
+  return {sett, city, road, robber:game.robber, dice:game.dice, player:actor,
+          title:`ターン ${tn}・行動 ${sn}`, hands:_snapHands(), events, actions:[action],
+          ...(winProb?{winProb}: {})};
+}
+function _publicActionText(o){
+  if(!o) return "行動";
+  if(o.a==="roll") return o.total===7 ? `🎲 ${o.total}（盗賊！）` : `🎲 ${o.total}`;
+  if(o.a==="discard") return `手札を${Object.values(o.res||{}).reduce((a,b)=>a+b,0)}枚捨てた`;
+  if(o.a==="endTurn") return "ターン終了";
+  return "行動";
+}
+function _recAct(o){
+  if(!game) return;
+  if(!game._acts) game._acts=[];
+  if(!game._actionFrames) game._actionFrames=[];
+  game._acts.push(o);
+  const actor=Number(o&&((o.p!=null&&o.p)||(o.to!=null&&o.to)))||cur();
+  const mark=game._actionLogMark!=null ? game._actionLogMark : (game._logMark||0);
+  let events=game.log.slice(mark).map(l=>`P${l.p} ${l.msg}`);
+  game._actionLogMark=game.log.length;
+  if(!events.length) events=[`P${actor} ${_publicActionText(o)}`];
+  game._actionFrames.push(_actionFrame(actor,events,o));
+}
 // 現在の盤面状態を棋譜1コマとして記録（都市も含める）
 function snapshotTurn(){
   if(!game) return;
@@ -387,9 +422,12 @@ function snapshotTurn(){
   let winProb=null; try{ winProb=estimateWinProbabilities(); }catch(e){}
   game.turns.push({sett, city, road, robber:game.robber, dice:game.dice, player:cur(),
                    title, hands:_snapHands(), events: lastMsgs.length?lastMsgs:["（このターンの動きなし）"],
-                   actions:(game._acts||[]), ...(note?{note}: {}), ...(winProb?{winProb}: {})});
+                   actions:(game._acts||[]), steps:(game._actionFrames||[]),
+                   ...(note?{note}: {}), ...(winProb?{winProb}: {})});
   game._liveNote="";
   game._acts=[];   // 次ターン用にリセット
+  game._actionFrames=[];
+  game._actionLogMark=game.log.length;
 }
 // 各プレイヤーの手札・発展カード・VPを棋譜に残す（棋譜で手札を確認できるように）
 function _snapHands(){
@@ -417,7 +455,8 @@ function _snapSetupStep(sp, what){
                    title:`初期配置 ${n}／${numPlayers*4}　P${sp} が${what}`,
                    hands:_snapHands(),
                    events:[`P${sp} が${what}を置いた`], actions:(game._acts||[]), ...(winProb?{winProb}: {})});
-  game._logMark = game.log.length; game._acts=[];
+  game._logMark = game.log.length; game._actionLogMark=game.log.length;
+  game._acts=[]; game._actionFrames=[];
 }
 
 // --- サイコロと分配 ---
@@ -433,6 +472,7 @@ function doRoll(total){
     for(const p of game.order){ const t=handTotal(p); if(t>7) game.discardQueue.push({p, need:Math.floor(t/2)}); }
     game.phase = game.discardQueue.length ? "discard" : "robber";
     toast(game.discardQueue.length ? "7! 手札8枚以上は半分捨てます" : "7! 盗賊を動かすタイルをクリック");
+    _recAct({a:"roll", total, by:{}});
   }else{
     distribute(total);
     game.phase="main";
@@ -464,6 +504,7 @@ function distribute(total){
   }
   toast(gains.length ? `出目${total}: `+gains.join(" ") : `出目${total}: 資源なし`);
   if(gains.length) glog(`資源: ${gains.join(" ")}`);
+  else glog("資源の獲得なし");
   _recAct({a:"roll", total, by});
 }
 
@@ -541,6 +582,7 @@ function playDev(card){
 function resolvePlenty(res){
   if(bankOf(res)<=0){ toast("銀行にありません"); return; }
   gain(cur(),res,1); game.ask.picks--;
+  glog(`収穫で ${RES_JP[res]} を1枚獲得`);
   _recAct({a:"plenty", p:cur(), res});
   if(game.ask.picks<=0) game.ask=null;
   render(); updateGamePanel();
@@ -595,6 +637,8 @@ function endTurnGame(){
   if(game.phase!=="main"){ toast("処理を先に終えてください"); return; }
   if(game.ask || game.freeRoads>0){ toast("カードの処理を先に終えてください"); return; }
   const p=cur();
+  glog("ターン終了", p);
+  _recAct({a:"endTurn", p});
   snapshotTurn();                       // このターン終了時点の盤面を棋譜に記録
   for(const c in game.dev.bought[p]) game.dev.bought[p][c]=0;
   game.idx=(game.idx+1)%game.order.length;
@@ -845,6 +889,7 @@ function _tradeBank(p,give,get){ // DOM無しの銀行/港交易
   const rate=rateFor(p,give);
   if(give===get||game.hands[p][give]<rate||bankOf(get)<=0) return false;
   game.hands[p][give]-=rate; gain(p,get,1);
+  glog(`交換 ${RES_JP[give]}×${rate}→${RES_JP[get]}`, p);
   _recAct({a:"trade", p, give, get, rate});
   return true;
 }
@@ -1077,7 +1122,11 @@ function _botDiscard(){ // 捨て: 次の建設の予約分を守り、余剰か
     if(!pick) break;
     game.hands[p][pick]--; d.need--; disc[pick]=(disc[pick]||0)+1;
   }
-  if(Object.keys(disc).length) _recAct({a:"discard", p, res:disc});
+  if(Object.keys(disc).length){
+    const n=Object.values(disc).reduce((a,b)=>a+b,0);
+    glog(`手札を${n}枚捨てた`, p);   // 資源の種類は非公開のまま
+    _recAct({a:"discard", p, res:disc});
+  }
   game.discardQueue.shift();
   if(!game.discardQueue.length) game.phase="robber";
 }
