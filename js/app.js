@@ -448,7 +448,9 @@ function updateWinMeter(){
   const box=$("winMeter"), bar=$("winMeterBar"), labels=$("winMeterLabels"), btn=$("winMeterBtn");
   if(!box||!bar||!labels) return;
   box.classList.toggle("on",winMeterOn);
-  if(btn) btn.textContent=(LANG==="en"?"Win meter: ":"勝率ゲージ: ")+(winMeterOn?"ON":"OFF");
+  if(btn) btn.textContent=(uiMode==="mobile"
+    ? (LANG==="en"?"Win: ":"勝率: ")
+    : (LANG==="en"?"Win meter: ":"勝率ゲージ: "))+(winMeterOn?"ON":"OFF");
   if(!winMeterOn||!game) return;
   let probs=null;
   if(replay&&replay.active&&replay.turns[replay.idx]&&replay.turns[replay.idx].winProb) probs=replay.turns[replay.idx].winProb;
@@ -534,10 +536,12 @@ function renderHand(){
 // 試合中に書いたメモを、現在進行中のターンの棋譜コマへ添付する。
 // snapshotTurn() が確定保存して空にするため、次ターンへ誤って持ち越さない。
 function updateLiveNoteUI(){
-  const box=$("liveNoteBox"), input=$("liveTurnNote"), target=$("liveNoteTarget"), status=$("liveNoteStatus");
+  const box=$("liveNoteBox"), input=$("liveTurnNote"), target=$("liveNoteTarget"), status=$("liveNoteStatus"), toggle=$("noteToggle");
   if(!box || !input) return;
   const active=!!(game && game.phase!=="setup" && game.phase!=="over" && !(replay&&replay.active));
-  box.style.display=active?"block":"none";
+  // 開閉そのものは .open クラスに任せる。ここでは入力可能な局面かだけを制御する。
+  box.style.display=active?"":"none";
+  if(toggle) toggle.disabled=!active;
   if(!active) return;
   const p=cur();
   const tn=game.turns.filter(x=>!x.setup).length+1;
@@ -944,6 +948,7 @@ function applyMode(){
   _placeTradeRow();
   updateModeBtn();
   updateEvalBtn();                 // ラベル長がモードで変わるため再適用
+  updateWinMeter();                // 対局開始前もスマホ用の短いラベルにする
   closeTopMenu();                  // モード切替時はメニューを閉じる
   if(uiMode==="mobile") setMobileTab(mobileTab||"status");
   if(game) refresh(); else render();
@@ -970,7 +975,7 @@ function applyLang(){
   document.title = t("brand_title");
   document.querySelectorAll("[data-i18n]").forEach(el=>{ el.textContent=t(el.dataset.i18n); });
   document.querySelectorAll("[data-i18n-html]").forEach(el=>{ el.innerHTML=t(el.dataset.i18nHtml); });
-  updatePauseBtn(); updateEvalBtn(); updateLangBtn(); updateModeBtn(); setSpeed(aiSpeedSec); updateRvButtons();
+  updatePauseBtn(); updateEvalBtn(); updateWinMeter(); updateLangBtn(); updateModeBtn(); setSpeed(aiSpeedSec); updateRvButtons();
   buildTradeSelects(); buildStartScreen();
   if(game){ rerenderLog(); refresh(); if(replay && replay.active) showReplayTurn(); }
 }
@@ -1156,6 +1161,22 @@ function wireControls(){
   { const _tb=$("tuneBtn"); if(_tb) _tb.onclick=toggleTune;
     const _bd=$("tuneBackdrop"); if(_bd) _bd.onclick=closeTune;
     document.addEventListener("keydown",(e)=>{ if(e.key==="Escape" && _tuneOpen) closeTune(); }); }
+
+  // 盤面を最優先で見たい時の全画面表示。参考UIの拡大ボタンと同じ役割。
+  { const _bf=$("boardFocusBtn");
+    if(_bf) _bf.onclick=()=>{
+      const on=document.body.classList.toggle("board-focus");
+      _bf.textContent=on?"×":"⛶";
+      _bf.setAttribute("aria-label",on?"全画面表示を終了":"盤面を全画面表示");
+      _bf.title=on?"全画面表示を終了":"盤面を全画面表示";
+    }; }
+  // 棋譜コメントは必要な時だけ展開し、通常時の盤面高さを奪わない。
+  { const _nt=$("noteToggle"), _nb=$("liveNoteBox");
+    if(_nt&&_nb) _nt.onclick=()=>{
+      const on=_nb.classList.toggle("open");
+      _nt.classList.toggle("on",on);
+      _nt.textContent=on?"× コメントを閉じる":"✎ コメント";
+    }; }
 
   // 「⋯」二次操作メニュー（スマホ用ドロップダウン）
   const menuBtn=$("menuBtn"), topMenu=$("topMenu");

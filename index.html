@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>カタン 挑戦者AI 対局</title>
-<link rel="stylesheet" href="css/styles.css?v=20260824a">
+<link rel="stylesheet" href="css/styles.css?v=20260827b">
 </head>
 <body data-mode="pc" data-lang="ja">
 
@@ -52,6 +52,7 @@
   <!-- 盤面 -->
   <div id="boardRegion">
     <div class="boardwrap">
+      <button id="boardFocusBtn" class="boardfocus" type="button" aria-label="盤面を全画面表示" title="盤面を全画面表示">⛶</button>
       <svg id="board" viewBox="0 0 560 560" xmlns="http://www.w3.org/2000/svg"></svg>
     </div>
     <div id="replayBar">
@@ -157,6 +158,7 @@
       <div class="handhead">
         <span class="ht" data-i18n="hand_title">あなたの手札</span>
         <span id="meStat"></span>
+        <button id="noteToggle" class="btn sm ghost notetoggle" type="button">✎ コメント</button>
       </div>
       <div class="cards" id="myCards"></div>
       <div class="devcards" id="myDev"></div>
@@ -220,7 +222,7 @@
 <div id="toast" class="toast"></div>
 
 <script src="js/engine.js?v=20260827a"></script>
-<script src="js/app.js?v=20260826b"></script>
+<script src="js/app.js?v=20260827d"></script>
 <script src="js/multiplayer.js?v=20260826c"></script>
 </body>
 </html>
