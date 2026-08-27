@@ -500,12 +500,12 @@ function buyDev(){
   if(game.phase!=="main"){ toast("建設フェーズで買えます"); return; }
   if(!game.dev.deck.length){ toast("発展カードは売り切れ"); return; }
   if(!canPay(p,COST.dev)){ toast("資源が足りません(羊+小麦+鉱石)"); return; }
-  const _tagD=_evalTag("dev", null);
   pay(p,COST.dev);
   const c=game.dev.deck.pop();
   game.dev.hands[p][c]++; game.dev.bought[p][c]++;
   toast(`発展カードを購入（${DEV_JP[c]}）`);
-  glog(`発展カードを購入`+(_tagD?" "+_tagD:""));
+  // カード種別やAIの購入目的は非公開情報。共有ログには購入事実だけを残す。
+  glog(`発展カードを購入`);
   _recAct({a:"devBuy", p, card:c});
   checkWin(); render(); updateGamePanel();
 }

@@ -28,6 +28,17 @@ function send(res, status, body) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
   res.end(JSON.stringify(body));
 }
+function publicState(state) {
+  if (!state || typeof state !== "object") return state || null;
+  const copy = structuredClone(state);
+  const logs = copy.game && Array.isArray(copy.game.log) ? copy.game.log : [];
+  for (const entry of logs) {
+    if (entry && typeof entry.msg === "string" && entry.msg.startsWith("発展カードを購入")) {
+      entry.msg = "発展カードを購入";
+    }
+  }
+  return copy;
+}
 function publicRoom(room) {
   return {
     code: room.code,
@@ -36,7 +47,8 @@ function publicRoom(room) {
     aiSeat: room.aiSeat,
     hostSeat: room.hostSeat,
     members: Object.fromEntries(Object.entries(room.members).map(([seat, m]) => [seat, { seat: Number(seat), name: m.name }])),
-    state: room.state || null,
+    // 防御的にサーバーでも購入カード種別・内部評価タグを共有ログから除去する。
+    state: publicState(room.state),
     updatedAt: room.updatedAt,
     persistent
   };
