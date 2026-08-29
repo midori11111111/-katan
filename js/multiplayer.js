@@ -1,4 +1,4 @@
-/* Online lobby: 3 remote humans (P1-P3) vs strongest AI (P4).
+/* Online lobby: 2-3 remote humans vs strongest AI in the remaining seats.
    Turn-based snapshots are synchronized through /api/rooms. */
 const MP = {
   code: "", token: "", seat: 0, host: false, version: 0, room: null,
@@ -45,6 +45,33 @@ function mpClearSession() {
 function mpStorageReady() {
   return Boolean(MP.room && (MP.room.persistent || location.hostname === "127.0.0.1" || location.hostname === "localhost"));
 }
+function mpHumanCount(room) {
+  return Number((room || MP.room) && (room || MP.room).humanCount) === 2 ? 2 : 3;
+}
+function mpAiSeats(room) {
+  const source = room || MP.room;
+  const seats = source && Array.isArray(source.aiSeats) ? source.aiSeats.map(Number) : [Number(source && source.aiSeat || 4)];
+  return seats.filter(seat => seat >= 1 && seat <= 4);
+}
+function mpSeatConfig() {
+  const ai = new Set(mpAiSeats()), config = {};
+  for (let seat = 1; seat <= 4; seat++) config[seat] = ai.has(seat) ? "strong" : "human";
+  return config;
+}
+function mpApplySeatConfig() {
+  seatKind = mpSeatConfig();
+  seatAI = { ...seatKind };
+  if (game) game.ai = new Set(mpAiSeats());
+}
+function mpUpdateBrand() {
+  if (!MP.active) return;
+  const sub = document.querySelector(".brand .sub[data-i18n='brand_sub']");
+  if (!sub) return;
+  const humans = mpHumanCount(), ais = 4 - humans;
+  sub.textContent = typeof LANG !== "undefined" && LANG === "en"
+    ? `Online: ${humans} humans + ${ais} AI`
+    : `オンライン：人間${humans}人＋AI${ais}体`;
+}
 function mpOpen() {
   document.getElementById("mpOverlay").classList.add("show");
   const fromUrl = new URLSearchParams(location.search).get("room");
@@ -63,7 +90,9 @@ async function mpCreate() {
   const name = document.getElementById("mpName").value.trim();
   try {
     document.getElementById("mpCreate").disabled = true;
-    mpSessionFrom(await mpApi("POST", { op: "create", name, debug: Boolean(document.getElementById("mpDebugCreate")?.checked) }));
+    mpSessionFrom(await mpApi("POST", { op: "create", name,
+      humanCount: Number(document.getElementById("mpHumanCount")?.value || 3),
+      debug: Boolean(document.getElementById("mpDebugCreate")?.checked) }));
     history.replaceState(null, "", "?room=" + MP.code);
   } catch (error) { mpToast("部屋を作れませんでした"); }
   finally { document.getElementById("mpCreate").disabled = false; }
@@ -93,23 +122,24 @@ function mpRenderRoom() {
   document.getElementById("mpInviteUrl").value = location.origin + location.pathname + "?room=" + MP.code;
   const members = MP.room.members || {};
   const lottery = MP.room.status === "lobby";
+  const aiSeats = new Set(mpAiSeats()), needed = mpHumanCount();
   document.getElementById("mpSeats").innerHTML = [1, 2, 3, 4].map(seat => {
-    const member = members[seat], mine = seat === MP.seat;
-    const name = seat === 4 ? "最強AI" : (member ? member.name : "参加待ち");
-    return `<div class="mpseat ${member || seat === 4 ? "ready" : ""} ${mine ? "mine" : ""}">
-      <b>P${seat}</b><span>${mpEsc(name)}</span><small>${seat === 4 ? "AI" : (mine ? (lottery?"あなた・開始時に抽選":"あなた") : member ? (lottery?"開始時に抽選":"接続済み") : "空席")}</small>
+    const member = members[seat], mine = seat === MP.seat, isAISeat = aiSeats.has(seat);
+    const name = isAISeat ? "最強AI" : (member ? member.name : "参加待ち");
+    return `<div class="mpseat ${member || isAISeat ? "ready" : ""} ${mine ? "mine" : ""}">
+      <b>P${seat}</b><span>${mpEsc(name)}</span><small>${isAISeat ? "AI" : (mine ? (lottery?"あなた・開始時に抽選":"あなた") : member ? (lottery?"開始時に抽選":"接続済み") : "空席")}</small>
     </div>`;
   }).join("");
   const count = Object.keys(members).length;
   const start = document.getElementById("mpStart");
   start.hidden = !MP.host || MP.room.status !== "lobby";
-  start.disabled = count !== 3 || !mpStorageReady();
-  start.textContent = count === 3 ? "3人＋最強AIで対局開始" : `参加待ち（${count}/3人）`;
+  start.disabled = count !== needed || !mpStorageReady();
+  start.textContent = count === needed ? `${needed}人＋最強AI${4-needed}体で対局開始` : `参加待ち（${count}/${needed}人）`;
   document.getElementById("mpWait").textContent =
     !mpStorageReady() ? "オンライン同期ストレージの接続待ちです。現在は対局を開始できません" :
     MP.room.status === "playing" ? "対局へ接続しています…" :
     MP.room.status === "finished" ? "対局は終了しました" :
-    MP.host ? (count === 3 ? "3人揃いました。開始時にP1〜P3をシャッフルします" : `あと${3-count}人に招待URLを送ってください`) : "ホストが開始するまで待っています";
+    MP.host ? (count === needed ? `${needed}人揃いました。開始時にP1〜P${needed}をシャッフルします` : `あと${needed-count}人に招待URLを送ってください`) : "ホストが開始するまで待っています";
   mpRenderDebug();
 }
 function mpActiveSeat() {
@@ -124,7 +154,7 @@ function mpDebugControlSeat() {
 }
 function mpCanOperate(actor) {
   actor = Number(actor);
-  if (actor === MP.seat || (MP.host && actor === Number(MP.room && MP.room.aiSeat || 4))) return true;
+  if (actor === MP.seat || (MP.host && mpAiSeats().includes(actor))) return true;
   return Boolean(MP.host && MP.room && MP.room.debug && MP.debugEnabled && mpDebugControlSeat() === actor);
 }
 function mpRenderDebug() {
@@ -161,7 +191,7 @@ function mpSerialize() {
     ports: JSON.parse(JSON.stringify(ports)),
     placements: pl,
     game: gameCopy,
-    seatAI: { 1: "human", 2: "human", 3: "human", 4: "strong" },
+    seatAI: mpSeatConfig(),
     savedAt: Date.now()
   };
 }
@@ -184,9 +214,7 @@ function mpApply(state) {
       };
     }
     game = JSON.parse(JSON.stringify(state.game));
-    game.ai = new Set([4]);
-    seatKind = { 1: "human", 2: "human", 3: "human", 4: "strong" };
-    seatAI = { 1: "human", 2: "human", 3: "human", 4: "strong" };
+    mpApplySeatConfig();
     humanSeat = (MP.host && MP.room && MP.room.debug && MP.debugEnabled)
       ? mpDebugControlSeat()
       : MP.seat;
@@ -200,12 +228,13 @@ function mpApply(state) {
     render();
     if (typeof rerenderLog === "function") rerenderLog();
     updateGamePanel();
+    mpUpdateBrand();
   } finally { MP.applying = false; }
   mpRenderDebug();
   if (MP.host && !MP.publishing && !MP.outbox.length) aiMaybeGo();
 }
 async function mpStart() {
-  if (!MP.host || !MP.room || !mpStorageReady() || Object.keys(MP.room.members || {}).length !== 3) return;
+  if (!MP.host || !MP.room || !mpStorageReady() || Object.keys(MP.room.members || {}).length !== mpHumanCount()) return;
   const startButton = document.getElementById("mpStart");
   startButton.disabled = true;
   try {
@@ -213,15 +242,14 @@ async function mpStart() {
     const data = await mpApi("POST", { op: "start", code: MP.code, token: MP.token, version: MP.version });
     MP.seat = Number(data.seat); MP.host = true; MP.room = data.room; MP.version = data.room.version;
     mpSaveSession();
-    seatKind = { 1: "human", 2: "human", 3: "human", 4: "strong" };
-    seatAI = { 1: "human", 2: "human", 3: "human", 4: "strong" };
+    mpApplySeatConfig();
     humanSeat = MP.seat;
     startMatch();
-    game.ai = new Set([4]);
+    game.ai = new Set(mpAiSeats());
     MP.active = true;
     document.getElementById("mpOverlay").classList.remove("show");
     document.body.classList.add("multiplayer");
-    render(); updateGamePanel(); mpRenderDebug();
+    render(); updateGamePanel(); mpRenderDebug(); mpUpdateBrand();
     await mpEnqueuePublish(0, "start");
   } catch (error) {
     mpToast(error.message === "version_conflict" ? "部屋情報が更新されました。もう一度開始してください" : "対局を開始できませんでした");
@@ -322,11 +350,13 @@ function mpWrapAction(name) {
   try { eval(name + " = wrapped"); } catch (_) {}
 }
 function mpInstallHooks() {
+  const originalApplyLang = applyLang;
+  applyLang = function() { originalApplyLang(); mpUpdateBrand(); };
   const originalSeatAiName = seatAiName;
   seatAiName = function(p) {
     if (!MP.active || !MP.room) return originalSeatAiName(p);
     const seat = Number(p);
-    if (seat === Number(MP.room.aiSeat || 4)) return "最強AI";
+    if (mpAiSeats().includes(seat)) return "最強AI";
     const member = (MP.room.members || {})[seat];
     return member && member.name ? member.name : `P${seat}`;
   };
@@ -359,9 +389,10 @@ function mpBuildUi() {
     <div class="mpcard">
       <button id="mpClose" class="mpclose" aria-label="閉じる">×</button>
       <h2>オンライン対戦</h2>
-      <p class="mplead">人間3人で協力せずに対戦し、P4には最強AIが入ります。</p>
+      <p class="mplead">人間2〜3人で対戦し、残りの席には最強AIが入ります。</p>
       <div id="mpJoinPane">
         <label>表示名<input id="mpName" maxlength="20" autocomplete="nickname" placeholder="あなたの名前"></label>
+        <label>新しい部屋の構成<select id="mpHumanCount"><option value="3">人間3人＋最強AI1体</option><option value="2">人間2人＋最強AI2体</option></select></label>
         <label class="mpdebug-create"><input id="mpDebugCreate" type="checkbox"> デバッグ部屋にする（ホストが各席を手動操作可能）</label>
         <div class="mpbuttons"><button id="mpCreate" class="btn primary">新しい部屋を作る</button></div>
         <div class="mpor">または</div>

@@ -13,6 +13,15 @@ function randomCode() {
 function randomToken() {
   return crypto.randomBytes(24).toString("base64url");
 }
+function humanCountOf(room) {
+  return Number(room && room.humanCount) === 2 ? 2 : 3;
+}
+function aiSeatsOf(room) {
+  if (room && Array.isArray(room.aiSeats) && room.aiSeats.length) {
+    return room.aiSeats.map(Number).filter(seat => seat >= 1 && seat <= 4);
+  }
+  return [Number(room && room.aiSeat || 4)];
+}
 function shuffledMembers(room) {
   const original = Object.values(room.members).sort((a, b) => a.joinedAt - b.joinedAt);
   const shuffled = [...original];
@@ -53,11 +62,14 @@ function publicState(state) {
   return copy;
 }
 function publicRoom(room) {
+  const humanCount = humanCountOf(room), aiSeats = aiSeatsOf(room);
   return {
     code: room.code,
     version: room.version,
     status: room.status,
-    aiSeat: room.aiSeat,
+    aiSeat: aiSeats[0],
+    aiSeats,
+    humanCount,
     hostSeat: room.hostSeat,
     debug: Boolean(room.debug),
     members: Object.fromEntries(Object.entries(room.members).map(([seat, m]) => [seat, { seat: Number(seat), name: m.name }])),
@@ -106,8 +118,10 @@ module.exports = async function handler(req, res) {
     if (body.op === "create") {
       for (let tries = 0; tries < 8; tries++) {
         const code = randomCode(), token = randomToken(), now = Date.now();
+        const humanCount = Number(body.humanCount) === 2 ? 2 : 3;
+        const aiSeats = [1, 2, 3, 4].filter(seat => seat > humanCount);
         const room = {
-          code, version: 1, status: "lobby", aiSeat: 4, hostSeat: 1,
+          code, version: 1, status: "lobby", aiSeat: aiSeats[0], aiSeats, humanCount, hostSeat: 1,
           debug: Boolean(body.debug),
           members: { 1: { seat: 1, name: cleanName(body.name), tokenHash: tokenHash(token), joinedAt: now } },
           state: null, createdAt: now, updatedAt: now
@@ -124,7 +138,7 @@ module.exports = async function handler(req, res) {
     if (body.op === "join") {
       if (room.status !== "lobby") return send(res, 409, { error: "game_already_started" });
       const used = new Set(Object.keys(room.members).map(Number));
-      const seat = [1, 2, 3].find(s => !used.has(s));
+      const seat = Array.from({ length: humanCountOf(room) }, (_, i) => i + 1).find(s => !used.has(s));
       if (!seat) return send(res, 409, { error: "room_full" });
       const token = randomToken(), now = Date.now();
       const next = structuredClone(room);
@@ -140,7 +154,7 @@ module.exports = async function handler(req, res) {
 
     if (body.op === "start") {
       if (room.status !== "lobby") return send(res, 409, { error: "game_already_started" });
-      if (member.seat !== room.hostSeat || Object.keys(room.members).length !== 3) {
+      if (member.seat !== room.hostSeat || Object.keys(room.members).length !== humanCountOf(room)) {
         return send(res, 403, { error: "cannot_start" });
       }
       const hostHash = member.tokenHash, now = Date.now(), next = structuredClone(room);
@@ -162,10 +176,10 @@ module.exports = async function handler(req, res) {
       const actor = Number(body.actorSeat);
       const isHost = member.seat === room.hostSeat;
       if (room.status === "lobby") {
-        if (!isHost || Object.keys(room.members).length !== 3) return send(res, 403, { error: "cannot_start" });
+        if (!isHost || Object.keys(room.members).length !== humanCountOf(room)) return send(res, 403, { error: "cannot_start" });
       } else {
         const expectedActor = activeSeat(room.state);
-        const allowed = actor === member.seat || (isHost && (actor === room.aiSeat || room.debug));
+        const allowed = actor === member.seat || (isHost && (aiSeatsOf(room).includes(actor) || room.debug));
         if (!allowed || actor !== expectedActor) return send(res, 403, { error: "not_your_turn", expectedActor });
       }
       const now = Date.now(), next = structuredClone(room);
