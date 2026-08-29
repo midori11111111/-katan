@@ -435,7 +435,7 @@ function mpInstallHooks() {
   [
     "gameClickVertex", "gameClickEdge", "gameClickHex", "doRoll", "buyDev",
     "playDev", "resolvePlenty", "resolveMono", "doTrade", "endTurnGame",
-    "stealFrom", "humanDiscard"
+    "stealFrom", "humanDiscard", "_botDiscard"
   ].forEach(mpWrapAction);
 }
 function mpBuildUi() {
