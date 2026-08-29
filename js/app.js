@@ -225,6 +225,61 @@ let rvPlayTimer = null;
 let uiMode = "pc";
 let mobileTab = "status";
 let _overHandled = false;
+let placementConfirmMode = false;
+let GAME_PENDING_PLACEMENT = null;
+try { placementConfirmMode = localStorage.getItem("catan_place_confirm") === "1"; } catch(e) {}
+
+function clearPendingPlacement(renderNow){
+  GAME_PENDING_PLACEMENT = null;
+  if(renderNow!==false && game) render();
+}
+function placementPreview(){
+  if(!placementConfirmMode || !GAME_PENDING_PLACEMENT || !game) return null;
+  const a=GAME_PENDING_PLACEMENT, activeSeat=(game.phase==="setup"&&game.setup)?Number(game.setup.queue[game.setup.step]):Number(cur());
+  if(a.phase!==game.phase || a.seat!==activeSeat){ GAME_PENDING_PLACEMENT=null; return null; }
+  return a;
+}
+function gamePlacementTap(type,id){
+  if(!game || !placementConfirmMode) return false;
+  const activeSeat=(game.phase==="setup"&&game.setup)?Number(game.setup.queue[game.setup.step]):Number(cur());
+  const buildPhase = type==="vertex"
+    ? ((game.phase==="setup"&&game.setup&&game.setup.phase==="settle") || game.phase==="main")
+    : ((game.phase==="setup"&&game.setup&&game.setup.phase==="road") || game.phase==="main");
+  if(!buildPhase) return false;
+  if(!isHuman(activeSeat)){ toast(`現在はP${activeSeat}の操作待ちです`); return true; }
+  let kind="road";
+  if(type==="vertex"){
+    const oc=occupantOf(id);
+    kind=(game.phase==="main"&&oc&&oc.p===activeSeat&&oc.type==="settlement")?"city":"settlement";
+  }
+  const same=GAME_PENDING_PLACEMENT && GAME_PENDING_PLACEMENT.type===type && GAME_PENDING_PLACEMENT.id===Number(id)
+    && GAME_PENDING_PLACEMENT.phase===game.phase && GAME_PENDING_PLACEMENT.seat===activeSeat;
+  if(same){
+    GAME_PENDING_PLACEMENT=null;
+    if(type==="vertex") gameClickVertex(Number(id)); else gameClickEdge(Number(id));
+    aiMaybeGo();
+  }else{
+    GAME_PENDING_PLACEMENT={type,id:Number(id),kind,seat:activeSeat,phase:game.phase};
+    render();
+    toast(`${kind==="road"?"道":kind==="city"?"都市":"家"}の仮置きです。同じ場所をもう一度押すと確定します`);
+  }
+  return true;
+}
+function updatePlacementModeButton(){
+  const b=$("placementModeBtn"); if(!b)return;
+  b.textContent=placementConfirmMode?"配置操作: 2回タップ":"配置操作: ワンタッチ";
+  b.classList.toggle("on",placementConfirmMode);
+}
+function togglePlacementMode(){
+  setPlacementConfirmMode(!placementConfirmMode,true);
+}
+function setPlacementConfirmMode(on,announce){
+  placementConfirmMode=Boolean(on); clearPendingPlacement(false);
+  try{ localStorage.setItem("catan_place_confirm",placementConfirmMode?"1":"0"); }catch(e){}
+  updatePlacementModeButton(); if(game)render();
+  if(announce) toast(placementConfirmMode?"家・都市・道は仮置き後、同じ場所をもう一度押して確定します":"家・都市・道をワンタッチで置きます");
+  if(!game && typeof buildStartScreen==="function") buildStartScreen();
+}
 
 /* ============================================================
    エンジン関数の上書き（後勝ち）
@@ -993,7 +1048,7 @@ function applyLang(){
   document.title = t("brand_title");
   document.querySelectorAll("[data-i18n]").forEach(el=>{ el.textContent=t(el.dataset.i18n); });
   document.querySelectorAll("[data-i18n-html]").forEach(el=>{ el.innerHTML=t(el.dataset.i18nHtml); });
-  updatePauseBtn(); updateEvalBtn(); updateWinMeter(); updateLangBtn(); updateModeBtn(); setSpeed(aiSpeedSec); updateRvButtons();
+  updatePauseBtn(); updateEvalBtn(); updateWinMeter(); updateLangBtn(); updateModeBtn(); updatePlacementModeButton(); setSpeed(aiSpeedSec); updateRvButtons();
   buildTradeSelects(); buildStartScreen();
   if(game){ rerenderLog(); refresh(); if(replay && replay.active) showReplayTurn(); }
 }
@@ -1015,7 +1070,11 @@ function buildStartScreen(){
   modeRow.innerHTML=`<span class="sl">${t("start_mode")}</span>`;
   modeRow.appendChild(segBtn("PC", uiMode==="pc", ()=>{ uiMode="pc"; applyMode(); buildStartScreen(); }));
   modeRow.appendChild(segBtn(LANG==="en"?"Mobile":"スマホ", uiMode==="mobile", ()=>{ uiMode="mobile"; applyMode(); buildStartScreen(); }));
-  top.appendChild(langRow); top.appendChild(modeRow);
+  const placeRow=document.createElement("div"); placeRow.className="startseg";
+  placeRow.innerHTML=`<span class="sl">${LANG==="en"?"Placement":"配置操作"}</span>`;
+  placeRow.appendChild(segBtn(LANG==="en"?"One tap":"ワンタッチ", !placementConfirmMode, ()=>setPlacementConfirmMode(false,true)));
+  placeRow.appendChild(segBtn(LANG==="en"?"Tap twice":"2回タップ", placementConfirmMode, ()=>setPlacementConfirmMode(true,true)));
+  top.appendChild(langRow); top.appendChild(modeRow); top.appendChild(placeRow);
 
   // 各席の担当（人間 / 挑戦者AI / 現行AI）— 同じ端末で人間を複数席に置ける（ホットシート）
   const subEl=document.querySelector(".sublabel[data-i18n='your_seat']");
@@ -1176,6 +1235,7 @@ function wireControls(){
     const _ce=$("cpExport"); if(_ce) _ce.onclick=composerExport;
     document.querySelectorAll("#composerBar .cpp").forEach(b=>{ b.onclick=()=>setComposerPlayer(Number(b.dataset.cp)); }); }
   $("modeBtn").onclick=toggleMode; $("langBtn").onclick=toggleLang;
+  { const _pm=$("placementModeBtn"); if(_pm) _pm.onclick=togglePlacementMode; updatePlacementModeButton(); }
   { const _tb=$("tuneBtn"); if(_tb) _tb.onclick=toggleTune;
     const _bd=$("tuneBackdrop"); if(_bd) _bd.onclick=closeTune;
     document.addEventListener("keydown",(e)=>{ if(e.key==="Escape" && _tuneOpen) closeTune(); }); }

@@ -4137,14 +4137,17 @@ function render(){
   computeTransform();
   SVG.setAttribute("viewBox",`0 0 ${TF.w} ${TF.h}`);
   SVG.innerHTML="";
+  const _placePreview=(typeof placementPreview==="function")?placementPreview():null;
 
   // ヘクス面 + トークン
   for(const h of GEO.hexes){
     const info = board[h.id];
     const pts = hexCornersPx(h).map(p=>p.join(",")).join(" ");
     const poly = el("polygon",{points:pts, class:"hexface",
-      fill: info.resource ? RES_COLOR[info.resource] : "#2b3138", style:"cursor:pointer"});
+      fill: info.resource ? RES_COLOR[info.resource] : "#2b3138", style:"cursor:pointer",
+      role:"button",tabindex:0,"aria-label":`タイル ${h.id}`});
     poly.addEventListener("click",()=>clickHex(h.id));
+    poly.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();clickHex(h.id);}});
     SVG.appendChild(poly);
     const cx=TX(h.cx), cy=TY(h.cy);
     if(!info.resource){
@@ -4176,9 +4179,13 @@ function render(){
     if(owner){
       SVG.appendChild(el("line",{x1,y1,x2,y2,class:"edgeink",stroke:PCOLORS[owner-1]}));
     }
-    const hit=el("line",{x1,y1,x2,y2,class:"edge"});
+    const hit=el("line",{x1,y1,x2,y2,class:"edge",role:"button",tabindex:0,"aria-label":`道 ${e.id}`});
     hit.addEventListener("click",()=>clickEdge(e.id));
+    hit.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();clickEdge(e.id);}});
     SVG.appendChild(hit);
+    if(_placePreview&&_placePreview.type==="edge"&&_placePreview.id===e.id){
+      SVG.appendChild(el("line",{x1,y1,x2,y2,class:"placement-preview-line",stroke:PCOLORS[_placePreview.seat-1],"pointer-events":"none"}));
+    }
   }
 
   // 最善配置ハイライト（シミュ中は開拓地フェーズのみ）
@@ -4303,11 +4310,19 @@ function render(){
         transform:`rotate(45 ${cx} ${cy})`}));
     }
     SVG.appendChild(el("circle",{cx,cy,r:5,class:"vtx","pointer-events":"none"}));
-    const hitv=el("circle",{cx,cy,r:13,fill:"transparent",style:"cursor:pointer"});
+    const hitv=el("circle",{cx,cy,r:13,fill:"transparent",style:"cursor:pointer",role:"button",tabindex:0,"aria-label":`頂点 ${v.id}`});
     hitv.addEventListener("click",()=>clickVertex(v.id));
+    hitv.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();clickVertex(v.id);}});
     hitv.addEventListener("mouseenter",()=>showVtxPip(v.id));
     hitv.addEventListener("mouseleave",hideVtxPip);
     SVG.appendChild(hitv);
+  }
+
+  if(_placePreview&&_placePreview.type==="vertex"){
+    const v=GEO.vertices[_placePreview.id],cx=TX(v.x),cy=TY(v.y),col=PCOLORS[_placePreview.seat-1];
+    if(_placePreview.kind==="city") SVG.appendChild(el("polygon",{points:`${cx},${cy-15} ${cx-15},${cy+13} ${cx+15},${cy+13}`,class:"placement-preview-piece",fill:col,"pointer-events":"none"}));
+    else SVG.appendChild(el("rect",{x:cx-9,y:cy-9,width:18,height:18,rx:2,class:"placement-preview-piece",fill:col,transform:`rotate(45 ${cx} ${cy})`,"pointer-events":"none"}));
+    const label=el("text",{x:cx,y:cy-24,class:"placement-preview-label","text-anchor":"middle","pointer-events":"none"});label.textContent="もう一度で確定";SVG.appendChild(label);
   }
 
   // 盗賊フェーズ: おすすめの止め先に★
@@ -4373,7 +4388,7 @@ function vertexPip(vid){ return GEO.vertex_hexes[vid].reduce((s,h)=> s + (board[
 function vertexResources(vid){ return [...new Set(GEO.vertex_hexes[vid].map(h=>board[h].resource).filter(r=>r&&r!=="desert"))]; }
 
 function clickVertex(vid){
-  if(game){ gameClickVertex(vid); aiMaybeGo(); return; }
+  if(game){ if(typeof gamePlacementTap==="function"&&gamePlacementTap("vertex",vid))return; gameClickVertex(vid); aiMaybeGo(); return; }
   if(sim){
     if(sim.phase!=="settle"){ toast("いまは道を置く番です（金色の候補）"); return; }
     if(ownerOf("settlements",vid)){ toast("そこは使用中です"); return; }
@@ -4425,7 +4440,7 @@ function updateSimStatus(){
 }
 
 function clickEdge(eid){
-  if(game){ gameClickEdge(eid); aiMaybeGo(); return; }
+  if(game){ if(typeof gamePlacementTap==="function"&&gamePlacementTap("edge",eid))return; gameClickEdge(eid); aiMaybeGo(); return; }
   if(sim){
     if(sim.phase!=="road"){ toast("先に開拓地を置いてください"); return; }
     if(ownerOf("roads",eid)){ toast("その道は使用中です"); return; }

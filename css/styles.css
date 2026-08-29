@@ -20,6 +20,8 @@
 .mpclose{position:absolute;right:14px;top:12px;border:0;background:transparent;color:var(--text);font-size:28px;cursor:pointer}
 .mpcard label{display:grid;gap:6px;margin:12px 0;color:var(--muted);font-size:13px}
 .mpcard input{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);padding:12px;font-size:16px}
+.mpcard .mpdebug-create{display:flex;align-items:center;gap:8px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
+.mpcard .mpdebug-create input{width:17px;height:17px;padding:0;margin:0;accent-color:var(--gold)}
 .mpbuttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.mpor{text-align:center;color:var(--muted);margin:18px 0}
 .mpcode{font-size:15px;margin:10px 0 16px}.mpcode b{font-size:26px;letter-spacing:.14em;color:var(--gold)}
 #mpSeats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
@@ -29,7 +31,9 @@
 #mpWait{color:var(--muted)}.mpinvite{font-size:12px!important}.mplink{margin-top:16px;border:0;background:transparent;color:var(--muted);text-decoration:underline;cursor:pointer}
 .mpstatus{min-height:20px;margin-top:10px;color:var(--gold);font-size:13px}
 body.multiplayer #pauseBtn{display:none}
-@media(max-width:600px){.mpcard{padding:18px}.mpbuttons .btn{flex:1}#mpSeats{grid-template-columns:1fr}}
+.mpdebugdock{position:fixed;z-index:2200;left:12px;top:62px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:calc(100vw - 24px);padding:8px 10px;border:2px solid #dc8e32;border-radius:11px;background:rgba(27,22,16,.96);color:#fff4df;box-shadow:0 8px 24px rgba(0,0,0,.35);font-size:12px}
+.mpdebugdock[hidden]{display:none}.mpdebugdock label{display:flex;align-items:center;gap:5px}.mpdebugdock input{accent-color:#f2b451}.mpdebugdock select{padding:4px 7px}.mpdebugdock span{color:#efc77b}
+@media(max-width:600px){.mpcard{padding:18px}.mpbuttons .btn{flex:1}#mpSeats{grid-template-columns:1fr}.mpdebugdock{top:54px;left:6px;right:6px;max-width:none}}
 *{box-sizing:border-box}
 /* 実機モバイルでは 100vh がアドレスバー裏に隠れて下端が切れるため、
    動的ビューポート単位(dvh)を使う。100vh は非対応ブラウザ向けのフォールバック。 */
@@ -121,6 +125,9 @@ body[data-mode="mobile"] svg#board{width:100%; height:auto; max-height:40vh; max
 .vtx{cursor:pointer; fill:rgba(255,255,255,.10); stroke:rgba(255,255,255,.30); stroke-width:1}
 .vtx:hover{fill:var(--gold); stroke:#fff}
 .settle{pointer-events:none}
+.placement-preview-line{stroke-width:11;stroke-linecap:round;stroke-dasharray:10 5;opacity:.72;filter:drop-shadow(0 0 5px #fff)}
+.placement-preview-piece{stroke:#fff4bd;stroke-width:3;stroke-dasharray:5 3;opacity:.72;filter:drop-shadow(0 0 5px rgba(255,255,255,.9))}
+.placement-preview-label{font-size:10px;font-weight:900;fill:#fff4bd;paint-order:stroke;stroke:#17202a;stroke-width:3px;stroke-linejoin:round}
 .vlabel{font-size:8px; fill:var(--faint); text-anchor:middle; dominant-baseline:central; pointer-events:none}
 
 /* ---------- パネル領域 ---------- */

@@ -13,6 +13,19 @@ function randomCode() {
 function randomToken() {
   return crypto.randomBytes(24).toString("base64url");
 }
+function shuffledMembers(room) {
+  const original = Object.values(room.members).sort((a, b) => a.joinedAt - b.joinedAt);
+  const shuffled = [...original];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  // 1/6で参加順のままになると「シャッフルされていない」ように見えるため、必ず1席以上動かす。
+  if (shuffled.every((m, i) => m.tokenHash === original[i].tokenHash)) {
+    [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
+  }
+  return Object.fromEntries(shuffled.map((m, i) => [i + 1, { ...m, seat: i + 1 }]));
+}
 function tokenHash(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
 }
@@ -46,6 +59,7 @@ function publicRoom(room) {
     status: room.status,
     aiSeat: room.aiSeat,
     hostSeat: room.hostSeat,
+    debug: Boolean(room.debug),
     members: Object.fromEntries(Object.entries(room.members).map(([seat, m]) => [seat, { seat: Number(seat), name: m.name }])),
     // 防御的にサーバーでも購入カード種別・内部評価タグを共有ログから除去する。
     state: publicState(room.state),
@@ -94,6 +108,7 @@ module.exports = async function handler(req, res) {
         const code = randomCode(), token = randomToken(), now = Date.now();
         const room = {
           code, version: 1, status: "lobby", aiSeat: 4, hostSeat: 1,
+          debug: Boolean(body.debug),
           members: { 1: { seat: 1, name: cleanName(body.name), tokenHash: tokenHash(token), joinedAt: now } },
           state: null, createdAt: now, updatedAt: now
         };
@@ -123,6 +138,21 @@ module.exports = async function handler(req, res) {
     const member = memberFor(room, body.token);
     if (!member) return send(res, 401, { error: "invalid_session" });
 
+    if (body.op === "start") {
+      if (room.status !== "lobby") return send(res, 409, { error: "game_already_started" });
+      if (member.seat !== room.hostSeat || Object.keys(room.members).length !== 3) {
+        return send(res, 403, { error: "cannot_start" });
+      }
+      const hostHash = member.tokenHash, now = Date.now(), next = structuredClone(room);
+      next.members = shuffledMembers(room);
+      next.hostSeat = Number(Object.keys(next.members).find(seat => next.members[seat].tokenHash === hostHash));
+      next.version++; next.updatedAt = now;
+      const saved = await compareAndSet(code, room.version, next);
+      if (!saved.ok) return send(res, 409, { error: "version_conflict", room: saved.room ? publicRoom(saved.room) : null });
+      const moved = memberFor(saved.room, body.token);
+      return send(res, 200, { seat: moved.seat, host: true, room: publicRoom(saved.room) });
+    }
+
     if (body.op === "state") {
       if (!body.state || typeof body.state !== "object") return send(res, 400, { error: "invalid_state" });
       const stateBytes = Buffer.byteLength(JSON.stringify(body.state));
@@ -135,7 +165,7 @@ module.exports = async function handler(req, res) {
         if (!isHost || Object.keys(room.members).length !== 3) return send(res, 403, { error: "cannot_start" });
       } else {
         const expectedActor = activeSeat(room.state);
-        const allowed = actor === member.seat || (isHost && actor === room.aiSeat);
+        const allowed = actor === member.seat || (isHost && (actor === room.aiSeat || room.debug));
         if (!allowed || actor !== expectedActor) return send(res, 403, { error: "not_your_turn", expectedActor });
       }
       const now = Date.now(), next = structuredClone(room);
