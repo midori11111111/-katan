@@ -1746,7 +1746,7 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
     // ===== 家を能動的に一定数維持する（production diversity狙い。1番手は+1で拡張の出遅れを補う） =====
     const _sFloor=settleFloorFor(p);
     if(_sFloor>0 && AGGRO_TRADE && placements[p].settlements.size<_sFloor
-       && placements[p].settlements.size+placements[p].cities.size<5 && vpOf(p)<9){
+       && placements[p].settlements.size<5 && vpOf(p)<9){
       const si0=adv.find(x=>x.label.startsWith("開拓地")&&x.target&&x.target.id!=null);
       if(si0 && _canCompleteByTrade(p,COST.settlement)){
         _tradeToward(p,COST.settlement);
@@ -1796,7 +1796,13 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
       }
       if(stole) continue;
     }
-    const a=adv.find(x=>x.can);
+    let a=adv.find(x=>x.can);
+    // 開拓地の資源と合法な建設地が揃っているのに、先に道やカードへ木土羊麦を使って
+    // 「今建つ家」を自分で消してはいけない。都市化（交換して即都市化を含む）が
+    // 現在の最善手なら都市を優先するが、それ以外の行動より完成済みの開拓地を先に回収する。
+    // 道賞の即勝ちはこの直前の _roadWinRule が先に処理するので妨げない。
+    const _readySettle=adv.find(x=>x.can && x.label.startsWith("開拓地")&&x.target&&x.target.id!=null);
+    if(_readySettle && (!a || (!a.label.includes("都市化") && !a.label.startsWith("開拓地")))) a=_readySettle;
     if(!a || a.label.startsWith("ターン終了")){
       // ===== 終盤の即勝ちルート =====
       if(AGGRO_TRADE && vpOf(p)>=8){
@@ -1938,6 +1944,11 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
     else if(a.label.includes("に交換")){ const _nr=a._needRes||"ore"; for(const r of ["sheep","wood","brick"]){ if(game.hands[p][r]>=rateFor(p,r)) { _tradeBank(p,r,_nr); break; } } }
     else return;
     if(game.phase!=="main") return; // 勝利や騎士で遷移したら抜ける
+  }
+  // 交換や連続建設で12アクション上限に達した場合も、完成済みの家を持ち越さない。
+  if(game.phase==="main" && placements[p].settlements.size<5 && canPay(p,COST.settlement)){
+    const si=computeAdvice().find(x=>x.can&&x.label.startsWith("開拓地")&&x.target&&x.target.id!=null);
+    if(si) gameClickVertex(si.target.id);
   }
 }
 function _cleanupTurn(p){ // カードの置き残し・選択残しを処理してターン終了可能にする
