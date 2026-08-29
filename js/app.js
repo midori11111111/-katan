@@ -217,6 +217,9 @@ let seatAI = {1:"strong",2:"strong",3:"human",4:"strong"};
 let paused = false;
 let evalOn = false;
 let winMeterOn = false;
+let winMeterEstimate = null;
+let winMeterEstimateJob = 0;
+let winMeterEstimateTimer = null;
 let gameNote = "";   // 対局全体へのコメント（棋譜に保存）
 let aiSpeedSec = 1.0;
 let aiTimer = null;
@@ -499,8 +502,50 @@ function updateGamePanel(){
   if(game.phase==="over") onGameOver();
 }
 
+function winMeterStateKey(){
+  if(!game)return "";
+  const pl={};for(let p=1;p<=4;p++)pl[p]={s:[...placements[p].settlements].sort((a,b)=>a-b),c:[...(placements[p].cities||[])].sort((a,b)=>a-b),r:[...placements[p].roads].sort((a,b)=>a-b)};
+  const deck=game.dev&&Array.isArray(game.dev.deck)?game.dev.deck.slice().sort():[];
+  return JSON.stringify({phase:game.phase,idx:game.idx,setup:game.setup?{step:game.setup.step,phase:game.setup.phase,last:game.setup.lastSettle}:null,
+    robber:game.robber,dice:game.dice,rolled:game.rolled,rollCount:game.rollCount||0,hands:game.hands,
+    dev:game.dev?{hands:game.dev.hands,deck}:null,army:game.army,lr:game.lr,la:game.la,pl});
+}
+function winMeterBlend(prior,wins,n,priorWeight){
+  const out={};let sum=0;
+  for(let p=1;p<=4;p++){out[p]=(Number(wins[p]||0)+Number(prior[p]||0)*priorWeight)/(n+priorWeight);sum+=out[p];}
+  if(sum>0)for(let p=1;p<=4;p++)out[p]/=sum;
+  return out;
+}
+function requestPreciseWinEstimate(key,prior){
+  if(!game||game.phase==="over"||typeof winFullPlayoutContext!=="function"||typeof winFullPlayoutSample!=="function")return;
+  if(winMeterEstimate&&winMeterEstimate.key===key)return;
+  clearTimeout(winMeterEstimateTimer);const job=++winMeterEstimateJob;
+  // 明示的にゲージをONにした時は精度優先。結果は途中から逐次表示する。
+  // 未校正の学習値は16局分だけに抑え、最終値の大半を直接プレイアウトにする。
+  const target=uiMode==="mobile"?256:512,priorWeight=16,wins={1:0,2:0,3:0,4:0};
+  let base=null;try{base=winFullPlayoutContext();}catch(e){}
+  if(!base)return;
+  const started=performance.now();
+  winMeterEstimate={key,probs:prior,wins,done:0,attempts:0,failed:0,total:target,complete:false,elapsed:0};
+  const batch=()=>{
+    if(job!==winMeterEstimateJob||!winMeterOn||!game||winMeterStateKey()!==key)return;
+    const deadline=performance.now()+12;
+    do{
+      let w=0;try{w=Number(winFullPlayoutSample(base,((Math.random()*4294967295)>>>0)||1));}catch(e){}
+      winMeterEstimate.attempts++;
+      if(w>=1&&w<=4){wins[w]++;winMeterEstimate.done++;}else winMeterEstimate.failed++;
+    }while(winMeterEstimate.done<target&&winMeterEstimate.attempts<target*2&&performance.now()<deadline);
+    winMeterEstimate.probs=winMeterBlend(prior,wins,winMeterEstimate.done,priorWeight);
+    winMeterEstimate.elapsed=performance.now()-started;
+    winMeterEstimate.complete=winMeterEstimate.done>=target||winMeterEstimate.attempts>=target*2;
+    updateWinMeter();
+    if(!winMeterEstimate.complete)winMeterEstimateTimer=setTimeout(batch,0);
+  };
+  winMeterEstimateTimer=setTimeout(batch,0);
+}
+
 function updateWinMeter(){
-  const box=$("winMeter"), bar=$("winMeterBar"), labels=$("winMeterLabels"), btn=$("winMeterBtn");
+  const box=$("winMeter"), bar=$("winMeterBar"), labels=$("winMeterLabels"), btn=$("winMeterBtn"),meta=$("winMeterMeta");
   if(!box||!bar||!labels) return;
   box.classList.toggle("on",winMeterOn);
   if(btn) btn.textContent=(uiMode==="mobile"
@@ -509,8 +554,33 @@ function updateWinMeter(){
   if(!winMeterOn||!game) return;
   let probs=null;
   if(replay&&replay.active&&replay.turns[replay.idx]&&replay.turns[replay.idx].winProb) probs=replay.turns[replay.idx].winProb;
-  if(replay&&replay.active&&!probs){ bar.innerHTML=""; labels.innerHTML=`<div class="hint" style="grid-column:1/-1">${LANG==="en"?"No win-rate data in this record":"この棋譜には勝率記録がありません"}</div>`; return; }
-  if(!probs){ try{ probs=estimateWinProbabilities(); }catch(e){ probs=null; } }
+  if(replay&&replay.active&&!probs){
+    bar.innerHTML="";if(meta)meta.textContent=LANG==="en"?"Saved position estimate":"棋譜保存時の局面評価";
+    labels.innerHTML=`<div class="hint" style="grid-column:1/-1">${LANG==="en"?"No win-rate data in this record":"この棋譜には勝率記録がありません"}</div>`;return;
+  }
+  if(!probs){
+    let prior=null;try{prior=estimateWinProbabilities();}catch(e){}
+    if(prior){
+      const key=winMeterStateKey();requestPreciseWinEstimate(key,prior);
+      const est=winMeterEstimate&&winMeterEstimate.key===key?winMeterEstimate:null;
+      probs=est?est.probs:prior;
+      if(meta){
+        if(game.phase==="over")meta.textContent=LANG==="en"?"Final result":"終局確定";
+        else if(est&&est.complete){const err=est.done?100*1.96*Math.sqrt(.25/est.done):0;meta.textContent=LANG==="en"
+          ?`${est.done.toLocaleString()} exact-rule playouts + learned prior · sampling ≤±${err.toFixed(1)}%`
+          :`厳密ルール${est.done.toLocaleString()}局＋学習事前値・標本誤差最大±${err.toFixed(1)}%`;}
+        else if(est){const liveErr=est.done?100*1.96*Math.sqrt(.25/est.done):null;meta.textContent=LANG==="en"
+          ?`Calculating ${est.done}/${est.total}${liveErr?` · sampling ≤±${liveErr.toFixed(1)}%`:""}`
+          :`精密計算中 ${est.done}/${est.total}局${liveErr?`・標本誤差最大±${liveErr.toFixed(1)}%`:""}`;}
+        else meta.textContent=game.phase==="setup"
+          ?(LANG==="en"?"Setup: 30-feature learned value (AUC 0.946)":"初期配置中：30特徴学習モデル（AUC 0.946）")
+          :(LANG==="en"?"30-feature learned value":"30特徴学習モデル");
+        meta.title=LANG==="en"
+          ?"Assumes every seat continues with the current strongest AI policy. The ± figure is sampling error only."
+          :"全席が現行の最強AI方策で続行すると仮定。±は乱数による標本誤差のみです。";
+      }
+    }
+  }else if(meta)meta.textContent=LANG==="en"?"Estimate saved with this position":"この局面に保存された推定値";
   if(!probs) return;
   const vals=[1,2,3,4].map(p=>Math.max(0,Number(probs[p]||0)));
   const sum=vals.reduce((a,b)=>a+b,0)||1;
@@ -519,7 +589,11 @@ function updateWinMeter(){
   labels.innerHTML=pct.map((v,i)=>`<div class="wmlabel" style="color:${PCOLORS[i]}"><span>P${i+1}</span><b>${v.toFixed(1)}%</b></div>`).join("");
 }
 
-function toggleWinMeter(){ winMeterOn=!winMeterOn; updateWinMeter(); }
+function toggleWinMeter(){
+  winMeterOn=!winMeterOn;
+  if(!winMeterOn){clearTimeout(winMeterEstimateTimer);winMeterEstimateJob++;}
+  updateWinMeter();
+}
 
 function updateStatus(activeSeat){
   let phase="";

@@ -1324,6 +1324,12 @@ const VALUE_W_HUMAN = [-3.502760812501638, 0.29534758818479895, -0.6393882204524
 function _valScore(feat){ let z=VALUE_W_HUMAN[0]; const n=Math.min(feat.length, VALUE_W_HUMAN.length-1);
   for(let i=0;i<n;i++) z+=VALUE_W_HUMAN[i+1]*feat[i];
   if(z>30) return 1; if(z<-30) return 0; return 1/(1+Math.exp(-z)); }
+// 勝率ゲージ専用。相手モデリング7特徴を加えた人間棋譜モデル（30特徴・holdout AUC 0.9457）。
+// AI本体の探索葉は検証済み23特徴のままにし、表示だけを高精度化する。
+const WIN_VALUE_W_HUMAN3 = [1.0589354303744711,0.506204075570411,-0.5006489459699921,0.31144633200797583,0.41624477007394145,0.1136729036364452,0.15154003739726676,-0.05884958764097819,0.285401983229417,1.1771556562068535,-0.49978457216497385,0.07517835306553154,0.09139720609008628,0,-0.10579432718120303,-0.06458388511186453,-0.3635598375056709,0,1.3197485715621184,-0.08874957214890791,0.10281423625727398,0.025306936562719776,-3.4844641318906864,2.272411353520349,-3.823261044347526,0.01936665735650868,0.18917194931963294,-0.7634572710541324,-0.39368470173448744,-6.573977630965536,0.023631198102533967];
+function _winValScore(feat){ let z=WIN_VALUE_W_HUMAN3[0],n=Math.min(feat.length,WIN_VALUE_W_HUMAN3.length-1);
+  for(let i=0;i<n;i++)z+=WIN_VALUE_W_HUMAN3[i+1]*feat[i];
+  if(z>30)return 1;if(z<-30)return 0;return 1/(1+Math.exp(-z)); }
 const _origRandom = Math.random;
 let _rngOn = false, _rngState = 12345;
 let _roStats = {stdrest:0, endturn:0, city:0, tradecity:0, settle:0, tradesettle:0, road:0, dev:0, searched:0, delegated:0};
@@ -1406,8 +1412,34 @@ function stateFeat(p){
           owMin, myTurns, oppMinTurns, rivalNO, portSyn, robbedOW];
 }
 
-// 将棋の評価値ゲージに相当する4人勝率。V_humanを各席へ適用し、合計100%へ正規化する。
-// 非公開手札も含む内部状態ベースの参考値。終局だけは実際の勝者を100%に固定する。
+// 勝率表示用の30特徴。相手の鉄麦・都市ETA・騎士賞・道賞・脅威度・出目競合・建設レースを追加。
+function stateFeatWin(p){
+  const base=stateFeat(p).slice();
+  let oppOwMin=0,oppCityTurns=20,oppArmy=0,oppLR=0,oppThreat=0,dupOverlap=0;
+  let myTurns=Number(base[18]); if(!isFinite(myTurns))myTurns=20;
+  try{
+    const myNum=_prodNumbers(p);let myTot=0;for(const n in myNum)myTot+=myNum[n];
+    let rivalNO=0;
+    for(let q=1;q<=numPlayers;q++){if(q===p)continue;
+      try{const pq=production(q);oppOwMin=Math.max(oppOwMin,Math.min(pq.ore||0,pq.wheat||0));}catch(e){}
+      try{if(placements[q].settlements.size>0&&(placements[q].cities?placements[q].cities.size:0)<4){
+        const t=turnsToAfford(q,COST.city);if(isFinite(t))oppCityTurns=Math.min(oppCityTurns,t);}}catch(e){}
+      oppArmy=Math.max(oppArmy,(game.army&&game.army[q])||0);
+      try{oppLR=Math.max(oppLR,longestRoadOf(q));}catch(e){}
+      try{oppThreat=Math.max(oppThreat,threatOf(q));}catch(e){}
+      try{const qm=_prodNumbers(q);let overlap=0,nonOverlap=0,qTot=0;
+        for(const n in qm){qTot+=qm[n];if(myNum[n])overlap+=myNum[n];else nonOverlap+=qm[n];}
+        if(myTot>0)dupOverlap=Math.max(dupOverlap,overlap/myTot);
+        if(qTot>0)rivalNO=Math.max(rivalNO,(1+0.5*nonOverlap/qTot)*(_prodPips(q).tot||0));
+      }catch(e){}
+    }
+    base[20]=rivalNO;
+  }catch(e){}
+  const oppMinTurns=Number(base[19]),race=Math.max(-10,Math.min(10,(isFinite(oppMinTurns)?oppMinTurns:20)-myTurns));
+  return base.concat([oppOwMin,oppCityTurns,oppArmy,oppLR,oppThreat,dupOverlap,race]);
+}
+
+// 精密シミュレーションが完了するまで表示する学習事前分布。終局だけは勝者100%。
 function estimateWinProbabilities(){
   const out={};
   if(!game) return out;
@@ -1419,7 +1451,7 @@ function estimateWinProbabilities(){
   }
   let sum=0;
   for(const q of game.order){
-    let v=0.25; try{ v=_valScore(stateFeat(q)); }catch(e){}
+    let v=0.25; try{ v=_winValScore(stateFeatWin(q)); }catch(e){}
     v=Math.max(0.0001,Math.min(0.9999,v)); out[q]=v; sum+=v;
   }
   if(sum<=0){ for(const q of game.order) out[q]=1/game.order.length; }
@@ -1429,6 +1461,55 @@ function estimateWinProbabilities(){
   const confidence=Math.max(0.08,Math.min(0.95, Math.max(0,maxVP-2)/7*0.75 + Math.min(1,rc/120)*0.25));
   for(const q of game.order) out[q]=0.25*(1-confidence)+out[q]*confidence;
   return out;
+}
+
+// ===== 勝率ゲージ用・厳密ルールの終局プレイアウト =====
+// 軽量近似simは過去検証で方策の再現性が不足したため使わない。本物のルールエンジンを
+// 同期的に1局ずつ複製して回し、毎局必ず元局面へ復元する。初期配置中は学習値だけを使う。
+function winFullPlayoutContext(){
+  if(!game||game.phase==="setup"||game.phase==="over")return null;
+  return {snapshot:snapshotState()};
+}
+function _wmSeededRandom(seed){let x=(seed>>>0)||1;return ()=>{x=(Math.imul(x,1664525)+1013904223)>>>0;return x/4294967296;};}
+function _wmFullPlayToEnd(){
+  let rolls=0,iters=0;
+  try{
+    while(game.phase!=="over"&&rolls<400){
+      const q=cur();if(typeof _applyVariant==="function")_applyVariant(q);
+      if(game.phase==="roll"){if(_shouldPlayKnight(q))playDev("knight");if(game.phase==="roll"){doRoll(null);rolls++;}}
+      if(game.phase==="discard"){while(game.discardQueue.length)_botDiscard();}
+      if(game.phase==="robber"){const ra=robberAdvice();gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id);}
+      if(game.phase==="steal")stealFrom(bestStealTarget(game.stealCands));
+      if(game.phase==="main"){_botMain(q);_cleanupTurn(q);if(game.phase==="main")endTurnGame();}
+      if(++iters>3000)break;
+    }
+  }catch(e){return 0;}
+  if(game.phase!=="over")return 0;
+  let winner=1,best=-1;for(let q=1;q<=numPlayers;q++){const v=vpOf(q);if(v>best){best=v;winner=q;}}return winner;
+}
+function winFullPlayoutSample(base,seed){
+  if(!base)return 0;
+  const saved={render,updateGamePanel,toast,glog,_recAct,snapshotTurn,random:Math.random,
+    inPlayout:_inPlayout,seatAI:(typeof seatAI!=="undefined"?seatAI:null)};
+  const flags={ETA_W,ETA_SEATS,SCARCE_W,SCARCE_SEATS,LOOK_W,LOOK_SEATS,ROAD_WIN_SEATS,TURN_CFG,ROLLOUT_SEATS,
+    ROAD_PATH_SEATS,ROAD_PORT_W,ROBBER_RP_ARMY,PORT_SYNERGY,HP1_PORT,ROBBER_DELAY,HUMAN_SETUP};
+  let winner=0;
+  try{
+    render=()=>{};updateGamePanel=()=>{};toast=()=>{};glog=()=>{};_recAct=()=>{};snapshotTurn=()=>{};
+    Math.random=_wmSeededRandom(seed);_inPlayout=true;restoreState(base.snapshot);
+    if(typeof seatAI!=="undefined")seatAI={1:"strong",2:"strong",3:"strong",4:"strong"};
+    if(game&&game.dev&&Array.isArray(game.dev.deck)){
+      const d=game.dev.deck;for(let i=d.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[d[i],d[j]]=[d[j],d[i]];}
+    }
+    winner=_wmFullPlayToEnd();
+  }finally{
+    restoreState(base.snapshot);render=saved.render;updateGamePanel=saved.updateGamePanel;toast=saved.toast;glog=saved.glog;_recAct=saved._recAct;snapshotTurn=saved.snapshotTurn;
+    Math.random=saved.random;_inPlayout=saved.inPlayout;if(saved.seatAI)seatAI=saved.seatAI;
+    ETA_W=flags.ETA_W;ETA_SEATS=flags.ETA_SEATS;SCARCE_W=flags.SCARCE_W;SCARCE_SEATS=flags.SCARCE_SEATS;LOOK_W=flags.LOOK_W;LOOK_SEATS=flags.LOOK_SEATS;
+    ROAD_WIN_SEATS=flags.ROAD_WIN_SEATS;TURN_CFG=flags.TURN_CFG;ROLLOUT_SEATS=flags.ROLLOUT_SEATS;ROAD_PATH_SEATS=flags.ROAD_PATH_SEATS;ROAD_PORT_W=flags.ROAD_PORT_W;
+    ROBBER_RP_ARMY=flags.ROBBER_RP_ARMY;PORT_SYNERGY=flags.PORT_SYNERGY;HP1_PORT=flags.HP1_PORT;ROBBER_DELAY=flags.ROBBER_DELAY;HUMAN_SETUP=flags.HUMAN_SETUP;
+  }
+  return winner;
 }
 
 function _mainBuildCands(p){

@@ -3,8 +3,8 @@
 const MP = {
   code: "", token: "", seat: 0, host: false, version: 0, room: null,
   active: false, applying: false, publishing: false, outbox: [], actionDepth: 0,
-  deferredRoom: null, pollTimer: null, errorCount: 0,
-  debugEnabled: false, debugSeat: 0
+  deferredRoom: null, pollTimer: null, publishTimer: null, retryTimer: null, statusTimer: null, errorCount: 0,
+  forceApply: false, syncTrouble: false, debugEnabled: false, debugSeat: 0
 };
 
 function mpEsc(value) {
@@ -17,19 +17,30 @@ function mpToast(message) {
 }
 async function mpApi(method, body, query) {
   const suffix = query ? "?" + new URLSearchParams(query) : "";
-  const response = await fetch("/api/rooms" + suffix, {
-    method,
-    headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
-    body: method === "POST" ? JSON.stringify(body || {}) : undefined,
-    cache: "no-store"
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.error || `HTTP ${response.status}`);
-    error.status = response.status; error.data = data;
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch("/api/rooms" + suffix, {
+      method,
+      headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
+      body: method === "POST" ? JSON.stringify(body || {}) : undefined,
+      cache: "no-store",
+      signal: controller.signal
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data.error || `HTTP ${response.status}`);
+      error.status = response.status; error.data = data;
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      const timeoutError = new Error("request_timeout"); timeoutError.timeout = true; throw timeoutError;
+    }
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return data;
 }
 function mpSaveSession() {
   sessionStorage.setItem("catan_mp_session", JSON.stringify({
@@ -40,7 +51,23 @@ function mpClearSession() {
   sessionStorage.removeItem("catan_mp_session");
   Object.assign(MP, { code: "", token: "", seat: 0, host: false, version: 0, room: null, active: false,
     publishing: false, outbox: [], actionDepth: 0, deferredRoom: null, debugEnabled: false, debugSeat: 0 });
+  MP.forceApply = false; MP.syncTrouble = false;
   clearTimeout(MP.pollTimer);
+  clearTimeout(MP.publishTimer); clearTimeout(MP.retryTimer); clearTimeout(MP.statusTimer);
+}
+
+function mpSetSyncStatus(message, clearAfter) {
+  const status = document.getElementById("mpStatus"), badge = document.getElementById("mpSyncBadge");
+  clearTimeout(MP.statusTimer);
+  if (status) status.textContent = message || "";
+  if (badge) {
+    badge.textContent = message || ""; badge.hidden = !message;
+    badge.classList.toggle("ok", /完了|同期しました/.test(message || ""));
+  }
+  if (clearAfter) MP.statusTimer = setTimeout(() => {
+    if (status && status.textContent === message) status.textContent = "";
+    if (badge && badge.textContent === message) { badge.textContent = ""; badge.hidden = true; }
+  }, clearAfter);
 }
 function mpStorageReady() {
   return Boolean(MP.room && (MP.room.persistent || location.hostname === "127.0.0.1" || location.hostname === "localhost"));
@@ -258,37 +285,60 @@ async function mpStart() {
 }
 function mpEnqueuePublish(actorSeat, source) {
   if (!MP.active || MP.applying || !game) return Promise.resolve(false);
-  const item = { actorSeat: Number(actorSeat), source: source || "action", state: mpSerialize() };
-  const promise = new Promise(resolve => { item.resolve = resolve; });
-  MP.outbox.push(item); mpPumpPublish();
+  const actor = Number(actorSeat), state = mpSerialize();
+  let resolvePromise;
+  const promise = new Promise(resolve => { resolvePromise = resolve; });
+  const tail = MP.outbox[MP.outbox.length - 1];
+  // 同一手番内の「交換→建設→終了」などは最終状態だけ送れば情報を失わない。
+  // 送信中の先頭は触らず、その後ろだけをまとめてキュー肥大化を防ぐ。
+  if (tail && tail.actorSeat === actor && (!MP.publishing || MP.outbox.length > 1)) {
+    tail.state = state; tail.source = source || "action"; tail.resolves.push(resolvePromise);
+  } else {
+    MP.outbox.push({ actorSeat: actor, source: source || "action", state, resolves: [resolvePromise] });
+  }
+  clearTimeout(MP.publishTimer);
+  MP.publishTimer = setTimeout(mpPumpPublish, 35);
   return promise;
 }
 async function mpPumpPublish() {
   if (MP.publishing || !MP.outbox.length || !MP.active) return;
+  clearTimeout(MP.publishTimer); clearTimeout(MP.retryTimer);
   const item = MP.outbox[0];
   MP.publishing = true;
+  let retryDelay = 0, recoverFromServer = false;
   try {
     const result = await mpApi("POST", {
       op: "state", code: MP.code, token: MP.token, version: MP.version,
       actorSeat: item.actorSeat, state: item.state
     });
     MP.room = result.room; MP.version = result.room.version; MP.errorCount = 0;
-    MP.outbox.shift(); item.resolve(true);
+    MP.outbox.shift(); item.resolves.forEach(resolve => resolve(true));
+    if (MP.syncTrouble) mpSetSyncStatus("同期完了", 1200);
+    MP.syncTrouble = false;
   } catch (error) {
     if (error.status === 409 && error.data && error.data.room) {
       MP.room = error.data.room; MP.version = error.data.room.version;
-      MP.outbox.splice(0).forEach(x => x.resolve(false));
+      MP.outbox.splice(0).forEach(x => x.resolves.forEach(resolve => resolve(false)));
       if (error.data.room.state) mpApply(error.data.room.state);
+      mpSetSyncStatus("最新の局面に同期しました", 1800);
+      MP.syncTrouble = false;
+    } else if (error.status && error.status >= 400 && error.status < 500) {
+      // 権限違反や大き過ぎる状態は同じ内容を再送しても成功しない。サーバー局面へ戻す。
+      MP.outbox.splice(0).forEach(x => x.resolves.forEach(resolve => resolve(false)));
+      mpSetSyncStatus("操作を同期できませんでした。最新局面を再取得します");
+      recoverFromServer = true; MP.forceApply = true;
     } else {
       MP.errorCount++;
       // 通信断では状態を捨てず同じ不変スナップショットを再送する。
-      mpToast("同期に失敗しました。操作内容を保持して再送中…");
-      setTimeout(mpPumpPublish, Math.min(4000, 500 * MP.errorCount));
-      return;
+      MP.syncTrouble = true;
+      mpSetSyncStatus("通信が不安定です。操作内容を保持して自動再送中…");
+      retryDelay = Math.min(5000, 600 * MP.errorCount) + Math.floor(Math.random() * 250);
     }
   } finally {
     MP.publishing = false;
   }
+  if (retryDelay) { MP.retryTimer = setTimeout(mpPumpPublish, retryDelay); return; }
+  if (recoverFromServer) { mpSchedulePoll(100); return; }
   if (MP.outbox.length) mpPumpPublish();
   else if (MP.deferredRoom && MP.deferredRoom.version > MP.version) {
     const deferred = MP.deferredRoom; MP.deferredRoom = null; MP.room = deferred; MP.version = deferred.version;
@@ -303,16 +353,19 @@ async function mpPoll() {
   if (!MP.code || !MP.token) return;
   try {
     const data = await mpApi("GET", null, { code: MP.code, token: MP.token });
+    const forced = MP.forceApply;
     MP.host = data.host; MP.seat = Number(data.seat); MP.errorCount = 0;
     if (!MP.room || data.room.version >= MP.version) MP.room = data.room;
     mpSaveSession();
-    if (data.room.version > MP.version) {
+    if (data.room.version > MP.version || MP.forceApply) {
       if (MP.publishing || MP.outbox.length) MP.deferredRoom = data.room;
       else {
         MP.version = data.room.version;
         if (data.room.state && (data.room.status === "playing" || data.room.status === "finished")) mpApply(data.room.state);
       }
     }
+    MP.forceApply = false;
+    if (forced) { MP.syncTrouble = false; mpSetSyncStatus("最新の局面に同期しました", 1800); }
     mpRenderRoom();
   } catch (error) {
     MP.errorCount++;
@@ -334,6 +387,9 @@ function mpWrapAction(name) {
   try { original = eval(name); } catch (_) { return; }
   if (typeof original !== "function") return;
   const wrapped = function(...args) {
+    // 勝率ゲージの仮想対局はローカルの複製状態だけを操作する。
+    // 権限判定・publish を通すと、仮想局面が実際のオンライン部屋へ流れてしまう。
+    if (typeof _inPlayout !== "undefined" && _inPlayout) return original.apply(this, args);
     const outer = MP.actionDepth === 0, actor = mpActiveSeat();
     if (MP.active && outer) {
       const allowed = mpCanOperate(actor);
@@ -419,6 +475,9 @@ function mpBuildUi() {
     <select id="mpDebugSeat"><option value="0">現在の手番を操作</option><option value="1">P1を操作</option><option value="2">P2を操作</option><option value="3">P3を操作</option><option value="4">P4を操作</option></select>
     <span id="mpDebugStatus"></span>`;
   document.body.appendChild(debugDock);
+  const syncBadge = document.createElement("div");
+  syncBadge.id = "mpSyncBadge"; syncBadge.className = "mpsyncbadge"; syncBadge.hidden = true;
+  document.body.appendChild(syncBadge);
   const entry = document.createElement("button");
   entry.id = "mpEntry"; entry.className = "btn good"; entry.textContent = "🌐 オンライン対戦";
   const startRow = document.querySelector("#startScreen .startrow");

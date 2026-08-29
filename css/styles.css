@@ -34,6 +34,7 @@
 body.multiplayer #pauseBtn{display:none}
 .mpdebugdock{position:fixed;z-index:2200;left:12px;top:62px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:calc(100vw - 24px);padding:8px 10px;border:2px solid #dc8e32;border-radius:11px;background:rgba(27,22,16,.96);color:#fff4df;box-shadow:0 8px 24px rgba(0,0,0,.35);font-size:12px}
 .mpdebugdock[hidden]{display:none}.mpdebugdock label{display:flex;align-items:center;gap:5px}.mpdebugdock input{accent-color:#f2b451}.mpdebugdock select{width:auto;padding:4px 7px}.mpdebugdock span{color:#efc77b}
+.mpsyncbadge{position:fixed;z-index:2300;left:50%;top:62px;transform:translateX(-50%);max-width:calc(100vw - 24px);padding:8px 13px;border:1px solid #efb85e;border-radius:999px;background:rgba(44,30,13,.96);color:#ffe4a6;box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:12px;font-weight:800;text-align:center}.mpsyncbadge.ok{border-color:#6fc99a;background:rgba(15,49,35,.96);color:#bff4d6}.mpsyncbadge[hidden]{display:none}
 @media(max-width:600px){.mpcard{padding:18px}.mpbuttons .btn{flex:1}#mpSeats{grid-template-columns:1fr}.mpdebugdock{top:54px;left:6px;right:6px;max-width:none}}
 *{box-sizing:border-box}
 /* 実機モバイルでは 100vh がアドレスバー裏に隠れて下端が切れるため、
@@ -248,6 +249,7 @@ body[data-mode="mobile"] #gameLog{min-height:120px}
 .wmhead{display:flex; align-items:baseline; gap:8px; margin-bottom:5px}
 .wmhead b{font-size:12px; color:var(--gold)}
 .wmhead span{font-size:10px; color:var(--muted)}
+#winMeterMeta{font-variant-numeric:tabular-nums}
 #winMeterBar{height:18px; display:flex; overflow:hidden; border-radius:9px; background:#252a31; box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
 .wmseg{height:100%; min-width:0; transition:width .35s ease; border-right:1px solid rgba(0,0,0,.35)}
 #winMeterLabels{display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-top:4px; font-size:11px}
