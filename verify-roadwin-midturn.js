@@ -19,7 +19,7 @@ game={order:[1,2,3,4],idx:0,vpToWin:10,phase:"main",
   army:{1:0,2:0,3:0,4:0},lr:{holder:null,len:0},la:{holder:null,count:0},robber:0,
   dice:6,rolled:true,devPlayed:false,freeRoads:0,resume:null,discardQueue:[],stealCands:[],ask:null,
   ai:new Set([1]),log:[],turns:[],diceCount:0,rollCount:20,_acts:[],_actionFrames:[],_actionLogMark:0};
-ROAD_WIN_SEATS=new Set([1]); USE_BACKSOLVE=false; CITY_FOCUS=true; AGGRO_TRADE=false; STEAL_PRIZE=false;
+ROAD_WIN_SEATS=new Set([1]); USE_BACKSOLVE=false; CITY_FOCUS=false; AGGRO_TRADE=false; STEAL_PRIZE=false;
 _rwP2VPNextTurn=()=>0; // 7点時点では条件付き9点取りを発動させない
 
 const before={vp:vpOf(1),roads:longestRoadOf(1)};

@@ -1273,11 +1273,17 @@ function _rwFundingVariants(p){
   }catch(e){}
   return out;
 }
-function _rwFundingPlan(p,n){
+function _rwAddCost(dst,src,mult){
+  const m=(mult==null)?1:mult;
+  for(const r of RES5) dst[r]=(dst[r]||0)+(src[r]||0)*m;
+  return dst;
+}
+function _rwFundingPlan(p,n,extraCost){
   let best=null;
   for(const v of _rwFundingVariants(p)){
     const paid=Math.max(0,n-v.free);
     const cost={wood:paid,brick:paid};
+    if(extraCost) _rwAddCost(cost,extraCost,1);
     const tp=_rwTradePlanForCost(p,v.hand,cost);
     if(!tp) continue;
     // 勝ち手順では、少ない交換回数を最優先。並んだらカードを温存する。
@@ -1285,6 +1291,48 @@ function _rwFundingPlan(p,n){
     if(!best||score<best.score) best={score,card:v.card,picks:v.picks,trades:tp.trades,paid};
   }
   return best;
+}
+function _rwLegalSettlementChoices(p,n){
+  if(n<=0) return [];
+  const cands=[];
+  for(const vS of Object.keys(GEO.vertex_neighbors)){
+    const v=Number(vS);
+    if(occupantOf(v)) continue;
+    if(GEO.vertex_neighbors[v].some(x=>occupantOf(x))) continue;
+    if(!GEO.edges.some(e=>(e.a===v||e.b===v)&&placements[p].roads.has(e.id))) continue;
+    cands.push(v);
+  }
+  let answer=null;
+  const rec=(start,chosen)=>{
+    if(chosen.length===n){ answer=chosen.slice(); return true; }
+    for(let i=start;i<cands.length;i++){
+      const v=cands[i];
+      if(chosen.some(x=>GEO.vertex_neighbors[x].includes(v))) continue;
+      chosen.push(v); if(rec(i+1,chosen)) return true; chosen.pop();
+    }
+    return false;
+  };
+  rec(0,[]);
+  return answer;
+}
+function _rwWinningBuildPlans(p){
+  const need=Math.max(0,8-vpOf(p));          // 道賞の2点と合わせて10点に必要な建物点
+  if(need===0) return [{cities:[],settles:[],cost:{}}];
+  const citySlots=Math.max(0,4-placements[p].cities.size);
+  const cityTargets=[...placements[p].settlements];
+  const out=[];
+  for(let nc=0;nc<=Math.min(need,citySlots,cityTargets.length);nc++){
+    const ns=need-nc;
+    // 都市化した家のぶん開拓地コマが戻る。
+    if(ns>5-(placements[p].settlements.size-nc)) continue;
+    const settles=_rwLegalSettlementChoices(p,ns);
+    if(ns>0&&!settles) continue;
+    const cost={}; _rwAddCost(cost,COST.city,nc); _rwAddCost(cost,COST.settlement,ns);
+    out.push({cities:cityTargets.slice(0,nc),settles:settles||[],cost});
+  }
+  // 同じ勝ちなら消費枚数が少ない手順から調べる。
+  out.sort((a,b)=>RES5.reduce((s,r)=>s+(a.cost[r]||0)-(b.cost[r]||0),0));
+  return out;
 }
 function _rwAffordableRoads(p){
   const cap=15-placements[p].roads.size;
@@ -1354,14 +1402,22 @@ function _roadWinRule(p){
   if(aff.n<=0) return false;
   const plan=_rwBestExtension(p, aff.n, target);
   if(!plan || !plan.edges.length) return false;
+  // 最終道路を仮置きし、その道で新しく開く開拓地も含めて「建物＋道賞＝10点」を調べる。
+  for(const eid of plan.edges) placements[p].roads.add(eid);
+  const buildPlans=_rwWinningBuildPlans(p);
+  for(const eid of plan.edges) placements[p].roads.delete(eid);
+  let winning=null;
+  for(const bp of buildPlans){
+    const f=_rwFundingPlan(p,plan.edges.length,bp.cost);
+    if(f){ winning={build:bp,funding:f}; break; }
+  }
   const vpAfter = vpOf(p) + 2;
-  let go=false;
-  if(vpAfter>=10) go=true;                             // (2) 10点に到達するなら必ず
-  else if(vpAfter===8 || vpAfter===9){                 // (3) 8点/9点なら条件つきで必ず
+  let go=!!winning;
+  if(!go && (vpAfter===8 || vpAfter===9)){              // 8点/9点なら条件つきで必ず
     if(!_rwOppCanExceed(p, plan.len) && _rwP2VPNextTurn(p)>=0.25) go=true;
   }
   if(!go) return false;
-  const funding=_rwFundingPlan(p,plan.edges.length);
+  const funding=winning?winning.funding:_rwFundingPlan(p,plan.edges.length);
   if(!funding) return false;
   // 実行: 必要なら発展カード→解決→港/銀行交換→一筆書きの順に進める。
   if(funding.card && !game.devPlayed){
@@ -1375,12 +1431,23 @@ function _roadWinRule(p){
     }catch(e){ return false; }
   }
   for(const t of funding.trades){ if(!_tradeBank(p,t.give,t.get)) return false; }
+  // 都市は道路より先に建てられる。先に点を上げてから道賞を取れば、その道で即10点になる。
+  if(winning) for(const vid of winning.build.cities){
+    if(game.phase!=="main"||!canPay(p,COST.city)) return false;
+    gameClickVertex(vid);
+  }
   let built=0;
   for(const eid of plan.edges){
     if(ownerOf("roads",eid)) continue;
     if(!(game.freeRoads>0) && !canPay(p,COST.road)) break;
     try{ gameClickEdge(eid); built++; }catch(e){ break; }
     if(game.phase!=="main") break;                     // 勝利で終局
+  }
+  // 道によって初めて開いた建設地は、道賞取得後に家を建てて10点へ到達する。
+  if(winning && game.phase==="main") for(const vid of winning.build.settles){
+    if(!canPay(p,COST.settlement)) return built>0;
+    gameClickVertex(vid);
+    if(game.phase!=="main") break;
   }
   return built>0;
 }

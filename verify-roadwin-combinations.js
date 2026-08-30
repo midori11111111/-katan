@@ -30,7 +30,8 @@ const trail=trailOf(5);
 
 function setup(kind){
   resetPlacements(); for(let p=1;p<=4;p++) placements[p].cities=new Set();
-  placements[1].settlements=new Set(); placements[1].cities=new Set([0,7,14,20]);
+  placements[1].settlements=kind==="settle"?new Set([20]):new Set();
+  placements[1].cities=kind==="settle"?new Set([0,7,14]):new Set([0,7,14,20]);
   placements[1].roads=new Set(kind==="multi"?[trail[0]]:trail.slice(0,4));
   const hands={1:emptyHand(),2:emptyHand(),3:emptyHand(),4:emptyHand()};
   const devHands={1:emptyDev(),2:emptyDev(),3:emptyDev(),4:emptyDev()};
@@ -38,6 +39,7 @@ function setup(kind){
   if(kind==="trade") hands[1].sheep=8;
   if(kind==="plenty") devHands[1].plenty=1;
   if(kind==="mono"){ hands[1].wood=1; hands[2].brick=1; devHands[1].mono=1; }
+  if(kind==="settle"){ hands[1].wood=2; hands[1].brick=2; hands[1].sheep=1; hands[1].wheat=1; }
   game={order:[1,2,3,4],idx:0,vpToWin:10,phase:"main",hands,
     dev:{deck:[],hands:devHands,bought:{1:emptyDev(),2:emptyDev(),3:emptyDev(),4:emptyDev()},played:{1:emptyDev(),2:emptyDev(),3:emptyDev(),4:emptyDev()}},
     army:{1:0,2:0,3:0,4:0},lr:{holder:null,len:0},la:{holder:null,count:0},robber:0,
@@ -46,12 +48,20 @@ function setup(kind){
   ROAD_WIN_SEATS=new Set([1]); USE_BACKSOLVE=false; CITY_FOCUS=false; AGGRO_TRADE=false; STEAL_PRIZE=false;
 }
 
-for(const kind of ["multi","trade","plenty","mono"]){
+for(const kind of ["multi","trade","plenty","mono","settle"]){
   setup(kind);
   const before={vp:vpOf(1),roads:longestRoadOf(1)};
-  _botMain(1);
+  const forced=_roadWinRule(1);
+  if(!forced){
+    const aff=_rwAffordableRoads(1), target=game.lr.holder?game.lr.len+1:5;
+    const rp=_rwBestExtension(1,aff.n,target); let bp=[];
+    if(rp){ for(const eid of rp.edges) placements[1].roads.add(eid); bp=_rwWinningBuildPlans(1); for(const eid of rp.edges) placements[1].roads.delete(eid); }
+    throw new Error(kind+" の確定勝ち手順を直接検出できませんでした: "+JSON.stringify({aff,rp,bp,funds:bp.map(x=>_rwFundingPlan(1,rp.edges.length,x.cost)),hand:game.hands[1]}));
+  }
+  if(game.phase==="main") _botMain(1);
   const after={vp:vpOf(1),roads:longestRoadOf(1),holder:game.lr.holder,phase:game.phase};
-  if(before.vp!==8 || after.vp!==10 || after.roads<5 || after.holder!==1 || after.phase!=="over")
+  const expectedBefore=kind==="settle"?7:8;
+  if(before.vp!==expectedBefore || after.vp!==10 || after.roads<5 || after.holder!==1 || after.phase!=="over")
     throw new Error(kind+" で道賞即勝ちを取り切れませんでした: "+JSON.stringify({before,after,log:game.log}));
   console.log("roadwin "+kind+" ok:",JSON.stringify({before,after,log:game.log.map(x=>x.msg)}));
 }
