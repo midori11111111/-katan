@@ -1278,9 +1278,10 @@ function _rwAddCost(dst,src,mult){
   for(const r of RES5) dst[r]=(dst[r]||0)+(src[r]||0)*m;
   return dst;
 }
-function _rwFundingPlan(p,n,extraCost){
+function _rwFundingPlan(p,n,extraCost,cardMode){
   let best=null;
   for(const v of _rwFundingVariants(p)){
+    if(cardMode==="none" && v.card) continue;
     const paid=Math.max(0,n-v.free);
     const cost={wood:paid,brick:paid};
     if(extraCost) _rwAddCost(cost,extraCost,1);
@@ -1344,6 +1345,15 @@ function _rwAffordableRoads(p){
   }
   return {n,funding};
 }
+function _rwNoCardRoadPlan(p,target){
+  const cap=15-placements[p].roads.size;
+  let n=0;
+  for(let k=1;k<=cap;k++){
+    if(!_rwFundingPlan(p,k,null,"none")) break;
+    n=k;
+  }
+  return n>0?_rwBestExtension(p,n,target):null;
+}
 function _rwOppCanExceed(p, myNewLen){
   for(let q=1;q<=numPlayers;q++){
     if(q===p) continue;
@@ -1398,6 +1408,16 @@ function _roadWinRule(p){
   if(game.lr.holder===p) return false;                 // 既に保持
   const holder=game.lr.holder;
   const target = holder ? (game.lr.len+1) : 5;         // 並ぶだけでは奪えない＝厳密に上回る
+  // 騎士1枚で騎士賞を確定し、その+2点と道賞+2点で10点になる経路。
+  // 騎士使用後はいったん盗賊フェーズへ移るが、処理後のmainで本関数が再度走り道を完遂する。
+  try{
+    const armyAfter=(game.army[p]||0)+1, la=game.la.holder;
+    const takesArmy=game.la.holder!==p && armyAfter>=3 && (la==null||armyAfter>(game.army[la]||0));
+    if(!game.devPlayed && canPlay("knight") && takesArmy && vpOf(p)+4>=10){
+      const knightRoad=_rwNoCardRoadPlan(p,target);
+      if(knightRoad&&knightRoad.edges.length){ playDev("knight"); return true; }
+    }
+  }catch(e){}
   const aff=_rwAffordableRoads(p);
   if(aff.n<=0) return false;
   const plan=_rwBestExtension(p, aff.n, target);

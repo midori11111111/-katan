@@ -40,16 +40,21 @@ function setup(kind){
   if(kind==="plenty") devHands[1].plenty=1;
   if(kind==="mono"){ hands[1].wood=1; hands[2].brick=1; devHands[1].mono=1; }
   if(kind==="settle"){ hands[1].wood=2; hands[1].brick=2; hands[1].sheep=1; hands[1].wheat=1; }
+  if(kind==="knight"){ hands[1].wood=1; hands[1].brick=1; devHands[1].knight=1; }
   game={order:[1,2,3,4],idx:0,vpToWin:10,phase:"main",hands,
     dev:{deck:[],hands:devHands,bought:{1:emptyDev(),2:emptyDev(),3:emptyDev(),4:emptyDev()},played:{1:emptyDev(),2:emptyDev(),3:emptyDev(),4:emptyDev()}},
-    army:{1:0,2:0,3:0,4:0},lr:{holder:null,len:0},la:{holder:null,count:0},robber:0,
+    army:{1:kind==="knight"?2:0,2:0,3:0,4:0},lr:{holder:null,len:0},la:{holder:null,count:0},robber:0,
     dice:6,rolled:true,devPlayed:false,freeRoads:0,resume:null,discardQueue:[],stealCands:[],ask:null,
     ai:new Set([1]),log:[],turns:[],diceCount:0,rollCount:20,_acts:[],_actionFrames:[],_actionLogMark:0};
   ROAD_WIN_SEATS=new Set([1]); USE_BACKSOLVE=false; CITY_FOCUS=false; AGGRO_TRADE=false; STEAL_PRIZE=false;
 }
 
-for(const kind of ["multi","trade","plenty","mono","settle"]){
+for(const kind of ["multi","trade","plenty","mono","settle","knight"]){
   setup(kind);
+  if(kind==="knight"){
+    placements[1].cities=new Set([0,7,14]);             // 6点。騎士賞+2、道賞+2で10点
+    placements[1].roads=new Set(trail.slice(0,4));
+  }
   const before={vp:vpOf(1),roads:longestRoadOf(1)};
   const forced=_roadWinRule(1);
   if(!forced){
@@ -58,9 +63,11 @@ for(const kind of ["multi","trade","plenty","mono","settle"]){
     if(rp){ for(const eid of rp.edges) placements[1].roads.add(eid); bp=_rwWinningBuildPlans(1); for(const eid of rp.edges) placements[1].roads.delete(eid); }
     throw new Error(kind+" の確定勝ち手順を直接検出できませんでした: "+JSON.stringify({aff,rp,bp,funds:bp.map(x=>_rwFundingPlan(1,rp.edges.length,x.cost)),hand:game.hands[1]}));
   }
+  if(kind==="knight"&&game.phase==="robber") gameClickHex(GEO.hexes.find(h=>h.id!==game.robber).id);
+  if(kind==="knight"&&game.phase==="main"&&!_roadWinRule(1)) throw new Error("knight の騎士賞後に道賞を完遂できませんでした");
   if(game.phase==="main") _botMain(1);
   const after={vp:vpOf(1),roads:longestRoadOf(1),holder:game.lr.holder,phase:game.phase};
-  const expectedBefore=kind==="settle"?7:8;
+  const expectedBefore=kind==="settle"?7:(kind==="knight"?6:8);
   if(before.vp!==expectedBefore || after.vp!==10 || after.roads<5 || after.holder!==1 || after.phase!=="over")
     throw new Error(kind+" で道賞即勝ちを取り切れませんでした: "+JSON.stringify({before,after,log:game.log}));
   console.log("roadwin "+kind+" ok:",JSON.stringify({before,after,log:game.log.map(x=>x.msg)}));
