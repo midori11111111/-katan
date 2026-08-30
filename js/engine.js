@@ -1195,45 +1195,106 @@ function _rwBestExtension(p, k, target){
   if(k<=0) return null;
   const base=longestRoadOf(p);
   if(base>=target) return {edges:[], len:base};
-  const cands=_rwLegalEdges(p);
-  if(!cands.length) return null;
-  let best=null;
   const roads=placements[p].roads;
-  const rec=(depth, startIdx, chosen)=>{
-    if(best) return;                       // 最小本数で見つけ次第終了
-    if(depth>0){
+  if(roads.size+k<target) return null;       // 道の総本数自体が足りない
+  let best=null;
+  // 以前は探索開始時点で合法な辺だけを固定候補にしていたため、
+  // 「1本目で接続が開き、その先へ2・3本目を伸ばす」一筆書きを見落としていた。
+  // 各深さで合法辺を再計算し、同じ追加辺集合は一度だけ調べる。
+  for(let limit=1;limit<=k && !best;limit++){
+    const seen=new Set();
+    const chosen=[];
+    const rec=()=>{
       const len=longestRoadOf(p);
-      if(len>=target){ best={edges:chosen.slice(), len}; return; }
+      if(len>=target){ best={edges:chosen.slice(),len}; return; }
+      if(chosen.length>=limit || roads.size+(limit-chosen.length)<target) return;
+      const key=chosen.slice().sort((a,b)=>a-b).join(",");
+      if(seen.has(key)) return;
+      seen.add(key);
+      // 最長路を大きく伸ばす辺から試す。結果は全候補を調べるので順序は速度にだけ影響する。
+      const ranked=[];
+      for(const eid of _rwLegalEdges(p)){
+        roads.add(eid);
+        ranked.push({eid,len:longestRoadOf(p)});
+        roads.delete(eid);
+      }
+      ranked.sort((a,b)=>b.len-a.len||a.eid-b.eid);
+      for(const x of ranked){
+        roads.add(x.eid); chosen.push(x.eid);
+        rec();
+        chosen.pop(); roads.delete(x.eid);
+        if(best) return;
+      }
+    };
+    rec();
+  }
+  return best;
+}
+
+function _rwTradePlanForCost(p, hand0, cost){
+  const hand=Object.assign({},hand0), trades=[];
+  const need={};
+  for(const r of RES5) need[r]=Math.max(0,(cost[r]||0)-(hand[r]||0));
+  for(const get of RES5){
+    while(need[get]>0){
+      if(bankOf(get)<=trades.filter(t=>t.get===get).length) return null;
+      let give=null,gr=99;
+      for(const r of RES5){
+        if(r===get) continue;
+        const rate=rateFor(p,r), reserve=cost[r]||0;
+        if((hand[r]||0)-reserve>=rate && rate<gr){ give=r; gr=rate; }
+      }
+      if(!give) return null;
+      hand[give]-=gr; hand[get]=(hand[get]||0)+1;
+      trades.push({give,get,rate:gr}); need[get]--;
     }
-    if(depth>=k) return;
-    for(let i=startIdx;i<cands.length;i++){
-      const eid=cands[i];
-      if(roads.has(eid)) continue;
-      roads.add(eid); chosen.push(eid);
-      // 新たに繋がったエッジも候補に入るが、探索を抑えるため既存候補のみで進める
-      rec(depth+1, i+1, chosen);
-      chosen.pop(); roads.delete(eid);
-      if(best) return;
+  }
+  return {hand,trades};
+}
+function _rwFundingVariants(p){
+  const base=Object.assign({},game.hands[p]);
+  const out=[{card:null,picks:[],hand:base,free:game.freeRoads||0}];
+  if(game.devPlayed || typeof canPlay!=="function") return out;
+  try{
+    if(canPlay("roads")) out.push({card:"roads",picks:[],hand:Object.assign({},base),free:(game.freeRoads||0)+2});
+    if(canPlay("plenty")){
+      for(let i=0;i<RES5.length;i++) for(let j=i;j<RES5.length;j++){
+        const a=RES5[i],b=RES5[j];
+        if(bankOf(a)<1+(a===b?1:0) || bankOf(b)<1) continue;
+        const h=Object.assign({},base); h[a]++; h[b]++;
+        out.push({card:"plenty",picks:[a,b],hand:h,free:game.freeRoads||0});
+      }
     }
-  };
-  for(let kk=1;kk<=k && !best;kk++){ const _k=kk; const rec2=(d,si,ch)=>{
-      if(best) return;
-      if(d===_k){ const len=longestRoadOf(p); if(len>=target) best={edges:ch.slice(), len}; return; }
-      for(let i=si;i<cands.length;i++){ const eid=cands[i]; if(roads.has(eid)) continue;
-        roads.add(eid); ch.push(eid); rec2(d+1,i+1,ch); ch.pop(); roads.delete(eid); if(best) return; } };
-    rec2(0,0,[]); }
+    if(canPlay("mono")) for(const r of RES5){
+      let got=0; for(const q of game.order) if(q!==p) got+=game.hands[q][r]||0;
+      if(got>0){ const h=Object.assign({},base); h[r]+=got;
+        out.push({card:"mono",picks:[r],hand:h,free:game.freeRoads||0}); }
+    }
+  }catch(e){}
+  return out;
+}
+function _rwFundingPlan(p,n){
+  let best=null;
+  for(const v of _rwFundingVariants(p)){
+    const paid=Math.max(0,n-v.free);
+    const cost={wood:paid,brick:paid};
+    const tp=_rwTradePlanForCost(p,v.hand,cost);
+    if(!tp) continue;
+    // 勝ち手順では、少ない交換回数を最優先。並んだらカードを温存する。
+    const score=tp.trades.length*10+(v.card?1:0);
+    if(!best||score<best.score) best={score,card:v.card,picks:v.picks,trades:tp.trades,paid};
+  }
   return best;
 }
 function _rwAffordableRoads(p){
-  let n = game.freeRoads||0;
-  let playRoadsCard = false;
-  try{ if(!game.devPlayed && typeof canPlay==="function" && canPlay("roads")){ n+=2; playRoadsCard=true; } }catch(e){}
-  const h=game.hands[p];
-  n += Math.min(h.wood, h.brick);
-  // 4:1/港交易で追加で作れる分（安全側に1本まで）
-  try{ if(_canCompleteByTrade(p, COST.road)) n += 1; }catch(e){}
-  const cap = 15 - placements[p].roads.size;
-  return {n: Math.max(0, Math.min(n, cap)), playRoadsCard};
+  const cap=15-placements[p].roads.size;
+  let n=0, funding=null;
+  for(let k=1;k<=cap;k++){
+    const f=_rwFundingPlan(p,k);
+    if(!f) break;
+    n=k; funding=f;
+  }
+  return {n,funding};
 }
 function _rwOppCanExceed(p, myNewLen){
   for(let q=1;q<=numPlayers;q++){
@@ -1291,7 +1352,7 @@ function _roadWinRule(p){
   const target = holder ? (game.lr.len+1) : 5;         // 並ぶだけでは奪えない＝厳密に上回る
   const aff=_rwAffordableRoads(p);
   if(aff.n<=0) return false;
-  const plan=_rwBestExtension(p, Math.min(aff.n,4), target);
+  const plan=_rwBestExtension(p, aff.n, target);
   if(!plan || !plan.edges.length) return false;
   const vpAfter = vpOf(p) + 2;
   let go=false;
@@ -1300,15 +1361,24 @@ function _roadWinRule(p){
     if(!_rwOppCanExceed(p, plan.len) && _rwP2VPNextTurn(p)>=0.25) go=true;
   }
   if(!go) return false;
-  // 実行: 街道建設カードがあれば先に使う（無料2本）
-  if(aff.playRoadsCard && !game.devPlayed){ try{ playDev("roads"); }catch(e){} }
+  const funding=_rwFundingPlan(p,plan.edges.length);
+  if(!funding) return false;
+  // 実行: 必要なら発展カード→解決→港/銀行交換→一筆書きの順に進める。
+  if(funding.card && !game.devPlayed){
+    try{
+      playDev(funding.card);
+      if(funding.card==="plenty"){
+        for(const r of funding.picks) if(game.ask) resolvePlenty(r);
+      }else if(funding.card==="mono" && game.ask){
+        resolveMono(funding.picks[0]);
+      }
+    }catch(e){ return false; }
+  }
+  for(const t of funding.trades){ if(!_tradeBank(p,t.give,t.get)) return false; }
   let built=0;
   for(const eid of plan.edges){
     if(ownerOf("roads",eid)) continue;
-    if(!(game.freeRoads>0) && !canPay(p,COST.road)){
-      try{ _tradeToward(p,COST.road); }catch(e){}
-      if(!canPay(p,COST.road)) break;
-    }
+    if(!(game.freeRoads>0) && !canPay(p,COST.road)) break;
     try{ gameClickEdge(eid); built++; }catch(e){ break; }
     if(game.phase!=="main") break;                     // 勝利で終局
   }
