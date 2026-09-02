@@ -284,6 +284,7 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 .segb.on{border-color:var(--gold); color:#fff; box-shadow:0 0 0 1px var(--gold) inset}
 .startcard h2{font-size:19px; font-weight:800; margin:10px 0 4px}
 .startcard .lead{color:var(--muted); font-size:13px; margin-bottom:14px}
+.startcard .researchnotice{color:var(--muted); font-size:12px; line-height:1.45; margin:0 0 14px; padding:8px 10px; border-left:3px solid var(--accent); background:rgba(25,118,210,.06)}
 .startcard .sublabel{color:var(--muted); font-size:13px; margin-bottom:8px}
 .seatpick{display:flex; gap:6px; margin-bottom:14px}
 .seatpick button{border:1px solid var(--line); background:var(--panel2); color:var(--muted); width:40px; height:36px; border-radius:9px; cursor:pointer; font-weight:800}

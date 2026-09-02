@@ -104,7 +104,7 @@ function researchRecord(room, state, now) {
     schema: 1,
     id,
     source: "public-online-match",
-    policyVersion: state && state.policyVersion || "20260903a",
+    policyVersion: state && state.policyVersion || "20260903b",
     createdAt: room.createdAt,
     updatedAt: now,
     status: state && state.game && state.game.phase === "over" ? "finished" : "playing",

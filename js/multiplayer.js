@@ -7,6 +7,106 @@ const MP = {
   forceApply: false, syncTrouble: false, debugEnabled: false, debugSeat: 0
 };
 
+// ソロ対局も、名前・端末識別子を持たない一時sessionで匿名保存する。
+// 対局進行はこの通信を一切待たず、失敗してもゲームには影響させない。
+const SOLO_RESEARCH = {
+  active: false, id: "", token: "", version: 0, generation: 0,
+  starting: false, sending: false, outbox: [], retryTimer: null, failures: 0
+};
+
+async function soloResearchApi(body) {
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch("/api/solo-research", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), cache: "no-store", signal: controller.signal
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data.error || `HTTP ${response.status}`);
+      error.status = response.status; error.data = data; throw error;
+    }
+    return data;
+  } finally { clearTimeout(timer); }
+}
+function soloSeatConfig() {
+  const out = {};
+  for (let seat = 1; seat <= 4; seat++) {
+    const kind = String((typeof seatAI !== "undefined" && seatAI && seatAI[seat]) ||
+      (typeof seatKind !== "undefined" && seatKind && seatKind[seat]) || "strong");
+    out[seat] = kind === "human" ? "human" : kind === "invincible" ? "invincible" : "strong";
+  }
+  return out;
+}
+function soloRecordState() {
+  const state = mpSerialize();
+  if (state.game && state.game.phase !== "over") {
+    // 行動直前局面はdecision側へ保存するため、進行中の完全棋譜を毎手重複送信しない。
+    delete state.game.turns; delete state.game.log; delete state.game._acts;
+    delete state.game._actionFrames; delete state.game._liveNote;
+  }
+  return state;
+}
+function soloResearchBegin() {
+  if ((MP.active || MP.code) || typeof game === "undefined" || !game) return;
+  clearTimeout(SOLO_RESEARCH.retryTimer);
+  const generation = ++SOLO_RESEARCH.generation;
+  Object.assign(SOLO_RESEARCH, { active: true, id: "", token: "", version: 0,
+    starting: true, sending: false, outbox: [], failures: 0 });
+  soloResearchApi({ op: "start" }).then(data => {
+    if (!SOLO_RESEARCH.active || SOLO_RESEARCH.generation !== generation) return;
+    SOLO_RESEARCH.id = data.id; SOLO_RESEARCH.token = data.token;
+    SOLO_RESEARCH.version = Number(data.version || 0); SOLO_RESEARCH.starting = false;
+    if (!SOLO_RESEARCH.outbox.length && game) {
+      SOLO_RESEARCH.outbox.push({ actor: 0, source: "startMatch", state: soloRecordState(), decisions: [] });
+    }
+    soloResearchPump();
+  }).catch(() => {
+    if (SOLO_RESEARCH.generation === generation) SOLO_RESEARCH.starting = false;
+  });
+}
+function soloResearchQueue(actor, source, decision) {
+  if (!SOLO_RESEARCH.active || MP.active || !game) return;
+  const item = { actor: Number(actor || 0), source: source || "action", state: soloRecordState(),
+    decisions: decision ? [decision] : [] };
+  const tail = SOLO_RESEARCH.outbox[SOLO_RESEARCH.outbox.length - 1];
+  if (tail && tail.actor === item.actor && !SOLO_RESEARCH.sending) {
+    tail.state = item.state; tail.source = item.source; tail.decisions.push(...item.decisions);
+  } else SOLO_RESEARCH.outbox.push(item);
+  soloResearchPump();
+}
+async function soloResearchPump() {
+  if (!SOLO_RESEARCH.active || SOLO_RESEARCH.starting || SOLO_RESEARCH.sending ||
+      !SOLO_RESEARCH.id || !SOLO_RESEARCH.outbox.length) return;
+  const item = SOLO_RESEARCH.outbox[0]; SOLO_RESEARCH.sending = true;
+  let retry = 0;
+  try {
+    const data = await soloResearchApi({ op: "state", id: SOLO_RESEARCH.id, token: SOLO_RESEARCH.token,
+      version: SOLO_RESEARCH.version, state: item.state, decisions: item.decisions });
+    SOLO_RESEARCH.version = Number(data.version); SOLO_RESEARCH.failures = 0;
+    SOLO_RESEARCH.outbox.shift();
+  } catch (error) {
+    if (error.status === 409 && Number(error.data && error.data.version) > SOLO_RESEARCH.version) {
+      // 応答だけ失われ、直前送信がサーバーで受理済みだった場合は重複追記しない。
+      SOLO_RESEARCH.version = Number(error.data.version); SOLO_RESEARCH.outbox.shift();
+    } else if (error.status && error.status >= 400 && error.status < 500) {
+      SOLO_RESEARCH.active = false; SOLO_RESEARCH.outbox = [];
+    } else {
+      SOLO_RESEARCH.failures++;
+      retry = Math.min(8000, 800 * SOLO_RESEARCH.failures) + Math.floor(Math.random() * 300);
+    }
+  } finally { SOLO_RESEARCH.sending = false; }
+  if (retry) SOLO_RESEARCH.retryTimer = setTimeout(soloResearchPump, retry);
+  else if (SOLO_RESEARCH.outbox.length) soloResearchPump();
+}
+
+// 旧版で終了済みの棋譜を、存在しない直前局面を捏造せず「完成棋譜・判断0件」として救済する。
+async function soloResearchBackfill(state) {
+  const started = await soloResearchApi({ op: "start", backfill: true });
+  return soloResearchApi({ op: "state", id: started.id, token: started.token,
+    version: started.version, state, decisions: [] });
+}
+
 function mpEsc(value) {
   return String(value == null ? "" : value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -215,12 +315,12 @@ function mpSerialize() {
   delete gameCopy._researchCapture;
   return {
     schema: 1,
-    policyVersion: "20260903a",
+    policyVersion: "20260903b",
     board: JSON.parse(JSON.stringify(board)),
     ports: JSON.parse(JSON.stringify(ports)),
     placements: pl,
     game: gameCopy,
-    seatAI: mpSeatConfig(),
+    seatAI: MP.active ? mpSeatConfig() : soloSeatConfig(),
     savedAt: Date.now()
   };
 }
@@ -236,6 +336,9 @@ function mpResearchState() {
   }
   delete state.savedAt;
   return state;
+}
+function mpStateFingerprint(state) {
+  return JSON.stringify(state, (key, value) => key === "savedAt" ? undefined : value);
 }
 function mpApply(state) {
   if (!state || !state.game) return;
@@ -412,23 +515,26 @@ function mpWrapAction(name) {
       const allowed = mpCanOperate(actor);
       if (!allowed) { mpToast(`現在はP${actor}の操作待ちです`); return; }
     }
-    const beforeState = MP.active && outer ? mpSerialize() : null;
-    const before = beforeState ? JSON.stringify(beforeState) : "";
+    const captureSolo = !MP.active && SOLO_RESEARCH.active && outer;
+    const beforeState = (MP.active && outer) || captureSolo ? mpSerialize() : null;
+    const before = beforeState ? mpStateFingerprint(beforeState) : "";
     const researchBefore = beforeState ? mpResearchState() : null;
-    if (MP.active && outer && game) game._researchCapture = [];
+    if (((MP.active && outer) || captureSolo) && game) game._researchCapture = [];
     MP.actionDepth++;
     try { return original.apply(this, args); }
     finally {
       MP.actionDepth--;
-      if (MP.active && outer && !MP.applying && JSON.stringify(mpSerialize()) !== before) {
+      if (((MP.active && outer && !MP.applying) || captureSolo) && mpStateFingerprint(mpSerialize()) !== before) {
         let actions = game && Array.isArray(game._researchCapture) ? game._researchCapture.slice() : [];
         // 初期配置は棋譜スナップショットへ直接記録され、_recActを通らない。
         // それでも「どの頂点/辺を押したか」を研究ログから失わないよう呼出しを補完する。
         if (!actions.length) actions = [{ a: "invoke", name,
           args: args.slice(0, 4).map(v => ["string", "number", "boolean"].includes(typeof v) ? v : null) }];
         if (game) delete game._researchCapture;
-        mpQueuePublish(actor, name, { actor, source: name, actions, before: researchBefore });
-      } else if (MP.active && outer && game) delete game._researchCapture;
+        const decision = { actor, source: name, actions, before: researchBefore };
+        if (MP.active) mpQueuePublish(actor, name, decision);
+        else if (captureSolo) soloResearchQueue(actor, name, decision);
+      } else if (((MP.active && outer) || captureSolo) && game) delete game._researchCapture;
     }
   };
   try { eval(name + " = wrapped"); } catch (_) {}

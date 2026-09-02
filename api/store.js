@@ -33,8 +33,12 @@ function researchKey(id) {
 function researchDecisionKey(id) {
   return `catan:research:decisions:${id}`;
 }
+function soloSessionKey(id) {
+  return `catan:research:solo-session:${id}`;
+}
 const RESEARCH_INDEX_KEY = "catan:research:index";
 const RESEARCH_TTL_SECONDS = 60 * 60 * 24 * 180;
+const SOLO_SESSION_TTL_SECONDS = 60 * 60 * 12;
 
 async function getRoom(code) {
   if (!useRedis) return memory.get(code) || null;
@@ -75,6 +79,95 @@ async function compareAndSet(code, expectedVersion, room) {
   }
   if (typeof result === "string" && result.startsWith("OK|")) {
     return { ok: true, room: JSON.parse(result.slice(3)) };
+  }
+  throw new Error("Unexpected Redis response");
+}
+
+async function createSoloSession(id, session) {
+  const k = soloSessionKey(id);
+  if (!useRedis) {
+    if (memory.has(k)) return false;
+    memory.set(k, session);
+    return true;
+  }
+  return await command(["SET", k, JSON.stringify(session), "EX", SOLO_SESSION_TTL_SECONDS, "NX"]) === "OK";
+}
+
+async function getSoloSession(id) {
+  const k = soloSessionKey(id);
+  if (!useRedis) return memory.get(k) || null;
+  const raw = await command(["GET", k]);
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function compareAndSetSoloSession(id, expectedVersion, session) {
+  const k = soloSessionKey(id);
+  if (!useRedis) {
+    const current = memory.get(k);
+    if (!current) return { ok: false, reason: "not_found" };
+    if (Number(current.version) !== Number(expectedVersion)) return { ok: false, reason: "conflict", session: current };
+    memory.set(k, session);
+    return { ok: true, session };
+  }
+  const script = [
+    "local raw=redis.call('GET',KEYS[1])",
+    "if not raw then return 'NOT_FOUND' end",
+    "local cur=cjson.decode(raw)",
+    "if tonumber(cur.version)~=tonumber(ARGV[1]) then return 'CONFLICT|'..raw end",
+    "redis.call('SET',KEYS[1],ARGV[2],'EX',ARGV[3])",
+    "return 'OK|'..ARGV[2]"
+  ].join("\n");
+  const result = await command(["EVAL", script, 1, k, expectedVersion, JSON.stringify(session), SOLO_SESSION_TTL_SECONDS]);
+  if (result === "NOT_FOUND") return { ok: false, reason: "not_found" };
+  if (typeof result === "string" && result.startsWith("CONFLICT|")) {
+    return { ok: false, reason: "conflict", session: JSON.parse(result.slice(9)) };
+  }
+  if (typeof result === "string" && result.startsWith("OK|")) {
+    return { ok: true, session: JSON.parse(result.slice(3)) };
+  }
+  throw new Error("Unexpected Redis response");
+}
+
+async function commitSoloResearchState(id, expectedVersion, session, record, decisions = []) {
+  const k = soloSessionKey(id);
+  if (!useRedis) {
+    const current = memory.get(k);
+    if (!current) return { ok: false, reason: "not_found" };
+    if (Number(current.version) !== Number(expectedVersion)) return { ok: false, reason: "conflict", session: current };
+    memory.set(k, structuredClone(session));
+    researchMemory.set(String(id), structuredClone(record));
+    if (decisions.length) {
+      const rows = researchDecisionMemory.get(String(id)) || [];
+      rows.push(...structuredClone(decisions));
+      researchDecisionMemory.set(String(id), rows);
+    }
+    return { ok: true, session };
+  }
+  const script = [
+    "local raw=redis.call('GET',KEYS[1])",
+    "if not raw then return 'NOT_FOUND' end",
+    "local cur=cjson.decode(raw)",
+    "if tonumber(cur.version)~=tonumber(ARGV[1]) then return 'CONFLICT|'..raw end",
+    "redis.call('SET',KEYS[1],ARGV[2],'EX',ARGV[5])",
+    "redis.call('SET',KEYS[2],ARGV[3],'EX',ARGV[6])",
+    "redis.call('ZADD',KEYS[3],ARGV[4],ARGV[7])",
+    "redis.call('EXPIRE',KEYS[3],ARGV[6])",
+    "for i=8,#ARGV do redis.call('RPUSH',KEYS[4],ARGV[i]) end",
+    "if #ARGV>=8 then redis.call('EXPIRE',KEYS[4],ARGV[6]) end",
+    "return 'OK|'..ARGV[2]"
+  ].join("\n");
+  const result = await command([
+    "EVAL", script, 4, k, researchKey(id), RESEARCH_INDEX_KEY, researchDecisionKey(id),
+    expectedVersion, JSON.stringify(session), JSON.stringify(record), Number(record.updatedAt || Date.now()),
+    SOLO_SESSION_TTL_SECONDS, RESEARCH_TTL_SECONDS, String(id),
+    ...decisions.map(row => JSON.stringify(row))
+  ]);
+  if (result === "NOT_FOUND") return { ok: false, reason: "not_found" };
+  if (typeof result === "string" && result.startsWith("CONFLICT|")) {
+    return { ok: false, reason: "conflict", session: JSON.parse(result.slice(9)) };
+  }
+  if (typeof result === "string" && result.startsWith("OK|")) {
+    return { ok: true, session: JSON.parse(result.slice(3)) };
   }
   throw new Error("Unexpected Redis response");
 }
@@ -157,6 +250,7 @@ async function getResearchDecisions(id, start = 0, limit = 500) {
 
 module.exports = {
   getRoom, createRoom, compareAndSet,
+  createSoloSession, getSoloSession, compareAndSetSoloSession, commitSoloResearchState,
   saveResearchSnapshot, getResearchSnapshot, listResearchSnapshots, getResearchDecisions,
   persistent: useRedis
 };

@@ -25,6 +25,7 @@ const I18N = {
     pause_title:"一時停止", play_title:"再生",
     mode_pc:"PC表示", mode_mobile:"スマホ表示",
     setup_title:"対局の設定",
+    research_notice:"AI改善のため、表示名・認証情報を含まない対局手順とコメントを匿名で保存します。",
     setup_lead:"各席のAIタイプを選んで対局。<br><b>挑戦者(関与なし)</b>=自己対戦だけで学習・人間データ不使用／<b>人間模倣</b>=強者棋譜由来の港評価・遅延盗賊・人間寄り配置ON／<b>現行AI</b>=従来の標準型。3種を並べて打たせ見比べられます。",
     your_seat:"あなたの席", you_operate:"あなた（この席を操作）",
     strong_full:"最強AI", ai_strong:"最強AI", invincible_full:"無敵AI（探索つき・重い）", ai_invincible:"無敵AI", challenger_full:"人間模倣（強者データ由来）", cpure_full:"挑戦者(関与なし)", standard_full:"現行AI（学習モデル・標準）",
@@ -96,6 +97,7 @@ const I18N = {
     pause_title:"Pause", play_title:"Play",
     mode_pc:"PC view", mode_mobile:"Mobile view",
     setup_title:"Game setup",
+    research_notice:"To improve the AI, game actions and comments are stored anonymously without display names or authentication data.",
     setup_lead:"Pick each seat's AI type, then start.<br><b>Challenger (raw)</b> = self-play only, no human data. <b>Human-imitation</b> = strong-player port valuation, delayed robber, human-like placement ON. <b>Current AI</b> = the previous default. Run all three side by side to compare.",
     your_seat:"Your seat", you_operate:"You (you play this seat)",
     strong_full:"Strongest AI", ai_strong:"Strongest", invincible_full:"Invincible AI (with search, slow)", ai_invincible:"Invincible", challenger_full:"Human-imitation (from strong-player data)", cpure_full:"Challenger (no-human data)", standard_full:"Current AI (learning model)",
@@ -1181,6 +1183,7 @@ function startMatch(){
   toast(humans.length
     ? (LANG==="en"?`Game start — humans: ${humans.map(x=>"P"+x).join(", ")}`:`対局開始 — 人間: ${humans.map(x=>"P"+x).join("・")}`)
     : (LANG==="en"?"Game start (all AI — watch)":"対局開始（全席AI・観戦）"));
+  if(!(typeof MP!=="undefined" && (MP.active || MP.code)) && typeof soloResearchBegin==="function") soloResearchBegin();
   refresh(); aiMaybeGo();
 }
 
