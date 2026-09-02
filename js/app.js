@@ -361,8 +361,9 @@ function _applyVariant(seat){
       ETA_W=0.02;   ETA_SEATS=one;
       SCARCE_W=15;  SCARCE_SEATS=one;
       LOOK_W=0.01;  LOOK_SEATS=one;
-      // 道賞の確定取り
+      // 確定10点探索（交換・建物・道・発展カード・賞の複合）
       ROAD_WIN_SEATS=one;
+      FORCED_WIN_SEATS=one;
       // 手札圧縮: 8枚から。ただし次の自分の番までに都市が50%以上で建つ見込みならステイ
       TURN_CFG={}; TURN_CFG[seat]={dbt:7, cmp:7, holdP:0.5};
       // [2026-08-19] 道の行き先を経路ベースにし、目的地に「使える港」を加える（+6.0pt）
@@ -373,7 +374,7 @@ function _applyVariant(seat){
       ROBBER_RP_ARMY = true;
     }else{
       ETA_W=0; ETA_SEATS=null; SCARCE_W=0; SCARCE_SEATS=null; LOOK_W=0; LOOK_SEATS=null;
-      ROAD_WIN_SEATS=null; TURN_CFG=null; ROLLOUT_SEATS=null;
+      ROAD_WIN_SEATS=null; FORCED_WIN_SEATS=null; TURN_CFG=null; ROLLOUT_SEATS=null;
       ROAD_PATH_SEATS=null; ROAD_PORT_W=0;
       ROBBER_RP_ARMY=false;
     }

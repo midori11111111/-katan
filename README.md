@@ -56,9 +56,39 @@ UPSTASH_REDIS_REST_TOKEN
 # または
 KV_REST_API_URL
 KV_REST_API_TOKEN
+
+# 匿名研究データを書き出す管理API専用（十分長いランダム文字列）
+RESEARCH_EXPORT_TOKEN
 ```
 
 ローカル確認は `npm run dev` で `http://127.0.0.1:4173` を開きます。ローカルではメモリ保存なので、サーバー再起動で部屋が消えます。
+
+### 匿名対局データからAIを改善する
+
+オンライン対局では、表示名・認証token・IPを研究データへ入れず、サーバーが受理した局面と各行動直前の状態を匿名IDで180日保存します。書き出しAPIは`RESEARCH_EXPORT_TOKEN`で保護され、対局クライアントへは返しません。
+
+```bash
+# Vercelから最新100対局を書き出す
+RESEARCH_EXPORT_TOKEN=... npm run research:export -- \
+  https://catan-challenger-online.vercel.app research_exports 100
+
+# 研究リポジトリ側で、AIが人間に負けた局面の全合法手を同一未来乱数で比較する
+node zoo.js pubgen online-site/research_exports 24 public_expert_data.jsonl 200
+
+# 対局IDで8:2分割済み。pubaudit側は閾値決定後に一度だけ開封する
+OV_AUDIT_PREFIX=pubaudit: node exfit_override.js \
+  public_expert_data.jsonl public_expert_ranker.json 8 4
+```
+
+上記を一括実行し、固定SEED・データhash由来の未選択fresh seedまで機械判定する場合は、研究リポジトリ直下で次を実行します。監査または対戦に落ちたモデルは不採用として記録され、本番AIを自動更新しません。
+
+```bash
+node run_public_learning.js online-site/research_exports
+```
+
+出力先の`manifest.json`が`ready-for-human-gate`になった場合だけ、最後に学習へ使っていない強い人間との実戦へ進めます。
+
+対局の勝敗や人間の実手をそのまま正解にはしません。負けたAI席の局面を優先して採取し、各候補を公開情報から再決定化した複数未来で比較して勝率差を教師にします。学習モデルは現行AIを全面置換せず、十分な確信がある局面だけを上書きする残差方策として評価します。
 
 ---
 
@@ -134,6 +164,8 @@ js/app.js          … 新UI・席別AIループ・評価値・リプレイ・�
 js/multiplayer.js  … オンラインロビー・局面同期・手番制御・再接続
 api/rooms.js       … 部屋作成・参加・取得・局面更新API
 api/store.js       … Upstash Redis保存（ローカル開発時はメモリ保存）
+api/research.js    … token保護された匿名研究データ書き出しAPI
+export-research.js … 公開対局をローカル研究データへ書き出すCLI
 shots/             … 動作確認スクリーンショット（参考）
 verify*.js         … 開発時の動作確認スクリプト（Playwright・遊ぶのに使いません）
 ```

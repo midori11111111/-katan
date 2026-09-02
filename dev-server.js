@@ -2,11 +2,13 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const rooms = require("./api/rooms");
+const research = require("./api/research");
 const root = __dirname;
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml" };
 
 const server = http.createServer(async (req, res) => {
   if (req.url.startsWith("/api/rooms")) return rooms(req, res);
+  if (req.url.startsWith("/api/research")) return research(req, res);
   const urlPath = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
   const rel = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
   const file = path.resolve(root, rel);

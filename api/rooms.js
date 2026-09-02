@@ -1,8 +1,9 @@
 const crypto = require("crypto");
-const { getRoom, createRoom, compareAndSet, persistent } = require("./store");
+const { getRoom, createRoom, compareAndSet, saveResearchSnapshot, persistent } = require("./store");
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MAX_STATE_BYTES = 2_500_000;
+const MAX_RESEARCH_BYTES = 800_000;
 
 function randomCode() {
   let out = "";
@@ -79,6 +80,63 @@ function publicRoom(room) {
     persistent
   };
 }
+function decisionCount(state) {
+  const g = state && state.game;
+  if (!g) return 0;
+  let n = Array.isArray(g._actionFrames) ? g._actionFrames.length : 0;
+  for (const turn of Array.isArray(g.turns) ? g.turns : []) {
+    if (Array.isArray(turn.steps)) n += turn.steps.length;
+    else if (Array.isArray(turn.actions)) n += turn.actions.length;
+  }
+  return n;
+}
+function winnerOf(state) {
+  const g = state && state.game;
+  if (!g || g.phase !== "over") return null;
+  const win = [...(Array.isArray(g.turns) ? g.turns : []), { actions: g._acts || [] }]
+    .flatMap(t => t && Array.isArray(t.actions) ? t.actions : [])
+    .find(a => a && a.a === "win");
+  return win ? Number(win.p) : null;
+}
+function researchRecord(room, state, now) {
+  const id = room.researchId || `${room.code}-${room.createdAt}`;
+  return {
+    schema: 1,
+    id,
+    source: "public-online-match",
+    policyVersion: state && state.policyVersion || "20260903a",
+    createdAt: room.createdAt,
+    updatedAt: now,
+    status: state && state.game && state.game.phase === "over" ? "finished" : "playing",
+    winner: winnerOf(state),
+    humanCount: humanCountOf(room),
+    aiSeats: aiSeatsOf(room),
+    decisions: Number(room.researchDecisionCount || 0),
+    // 氏名・認証token・IPは研究データへ入れない。対局状態と席種だけを保存する。
+    state
+  };
+}
+function cleanResearchDecisions(rows, room, now) {
+  if (!Array.isArray(rows)) return [];
+  const out = [];
+  for (const row of rows.slice(0, 24)) {
+    if (!row || typeof row !== "object" || !row.before || typeof row.before !== "object") continue;
+    const actor = Number(row.actor);
+    if (!(actor >= 1 && actor <= 4)) continue;
+    out.push({
+      schema: 1,
+      gameId: room.researchId,
+      ordinal: Number(room.researchDecisionCount || 0) + out.length,
+      capturedAt: now,
+      actor,
+      source: String(row.source || "action").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 40),
+      actions: Array.isArray(row.actions) ? row.actions.slice(0, 8) : [],
+      before: row.before
+    });
+  }
+  if (Buffer.byteLength(JSON.stringify(out)) > MAX_RESEARCH_BYTES) return [];
+  return out;
+}
 function memberFor(room, token) {
   const h = tokenHash(token);
   return Object.values(room.members).find(m => m.tokenHash === h) || null;
@@ -123,6 +181,8 @@ module.exports = async function handler(req, res) {
         const room = {
           code, version: 1, status: "lobby", aiSeat: aiSeats[0], aiSeats, humanCount, hostSeat: 1,
           debug: Boolean(body.debug),
+          researchId: crypto.randomUUID(),
+          researchDecisionCount: 0,
           members: { 1: { seat: 1, name: cleanName(body.name), tokenHash: tokenHash(token), joinedAt: now } },
           state: null, createdAt: now, updatedAt: now
         };
@@ -183,11 +243,20 @@ module.exports = async function handler(req, res) {
         if (!allowed || actor !== expectedActor) return send(res, 403, { error: "not_your_turn", expectedActor });
       }
       const now = Date.now(), next = structuredClone(room);
+      next.researchId = next.researchId || crypto.randomUUID();
+      const researchDecisions = cleanResearchDecisions(body.researchDecisions, next, now);
+      next.researchDecisionCount = Number(next.researchDecisionCount || 0) + researchDecisions.length;
       next.state = body.state;
       next.status = body.state.game && body.state.game.phase === "over" ? "finished" : "playing";
       next.version++; next.updatedAt = now;
       const saved = await compareAndSet(code, room.version, next);
       if (!saved.ok) return send(res, 409, { error: "version_conflict", room: saved.room ? publicRoom(saved.room) : null });
+      // 研究保存の障害で対局自体を止めない。CAS後の正規状態だけを保存する。
+      try {
+        await saveResearchSnapshot(saved.room.researchId, researchRecord(saved.room, saved.room.state, now), researchDecisions);
+      } catch (researchError) {
+        console.error("research_snapshot_failed", researchError);
+      }
       return send(res, 200, { room: publicRoom(saved.room) });
     }
 

@@ -212,8 +212,10 @@ function mpSerialize() {
   };
   const gameCopy = JSON.parse(JSON.stringify(game, (key, value) => value instanceof Set ? [...value] : value));
   delete gameCopy.ai;
+  delete gameCopy._researchCapture;
   return {
     schema: 1,
+    policyVersion: "20260903a",
     board: JSON.parse(JSON.stringify(board)),
     ports: JSON.parse(JSON.stringify(ports)),
     placements: pl,
@@ -221,6 +223,19 @@ function mpSerialize() {
     seatAI: mpSeatConfig(),
     savedAt: Date.now()
   };
+}
+function mpResearchState() {
+  const state = mpSerialize();
+  if (state.game) {
+    delete state.game.turns;
+    delete state.game.log;
+    delete state.game._acts;
+    delete state.game._actionFrames;
+    delete state.game._researchCapture;
+    delete state.game._liveNote;
+  }
+  delete state.savedAt;
+  return state;
 }
 function mpApply(state) {
   if (!state || !state.game) return;
@@ -283,7 +298,7 @@ async function mpStart() {
     mpSchedulePoll(100);
   } finally { startButton.disabled = false; }
 }
-function mpEnqueuePublish(actorSeat, source) {
+function mpEnqueuePublish(actorSeat, source, researchDecision) {
   if (!MP.active || MP.applying || !game) return Promise.resolve(false);
   const actor = Number(actorSeat), state = mpSerialize();
   let resolvePromise;
@@ -293,8 +308,10 @@ function mpEnqueuePublish(actorSeat, source) {
   // 送信中の先頭は触らず、その後ろだけをまとめてキュー肥大化を防ぐ。
   if (tail && tail.actorSeat === actor && (!MP.publishing || MP.outbox.length > 1)) {
     tail.state = state; tail.source = source || "action"; tail.resolves.push(resolvePromise);
+    if (researchDecision) tail.researchDecisions.push(researchDecision);
   } else {
-    MP.outbox.push({ actorSeat: actor, source: source || "action", state, resolves: [resolvePromise] });
+    MP.outbox.push({ actorSeat: actor, source: source || "action", state,
+      researchDecisions: researchDecision ? [researchDecision] : [], resolves: [resolvePromise] });
   }
   clearTimeout(MP.publishTimer);
   MP.publishTimer = setTimeout(mpPumpPublish, 35);
@@ -309,7 +326,7 @@ async function mpPumpPublish() {
   try {
     const result = await mpApi("POST", {
       op: "state", code: MP.code, token: MP.token, version: MP.version,
-      actorSeat: item.actorSeat, state: item.state
+      actorSeat: item.actorSeat, state: item.state, researchDecisions: item.researchDecisions
     });
     MP.room = result.room; MP.version = result.room.version; MP.errorCount = 0;
     MP.outbox.shift(); item.resolves.forEach(resolve => resolve(true));
@@ -345,9 +362,9 @@ async function mpPumpPublish() {
     if (deferred.state) mpApply(deferred.state);
   } else { MP.deferredRoom = null; if (MP.host) aiMaybeGo(); }
 }
-function mpQueuePublish(actorSeat, source) {
+function mpQueuePublish(actorSeat, source, researchDecision) {
   if (!MP.active || MP.applying) return;
-  mpEnqueuePublish(actorSeat, source);
+  mpEnqueuePublish(actorSeat, source, researchDecision);
 }
 async function mpPoll() {
   if (!MP.code || !MP.token) return;
@@ -395,12 +412,23 @@ function mpWrapAction(name) {
       const allowed = mpCanOperate(actor);
       if (!allowed) { mpToast(`現在はP${actor}の操作待ちです`); return; }
     }
-    const before = MP.active && outer ? JSON.stringify(mpSerialize()) : "";
+    const beforeState = MP.active && outer ? mpSerialize() : null;
+    const before = beforeState ? JSON.stringify(beforeState) : "";
+    const researchBefore = beforeState ? mpResearchState() : null;
+    if (MP.active && outer && game) game._researchCapture = [];
     MP.actionDepth++;
     try { return original.apply(this, args); }
     finally {
       MP.actionDepth--;
-      if (MP.active && outer && !MP.applying && JSON.stringify(mpSerialize()) !== before) mpQueuePublish(actor, name);
+      if (MP.active && outer && !MP.applying && JSON.stringify(mpSerialize()) !== before) {
+        let actions = game && Array.isArray(game._researchCapture) ? game._researchCapture.slice() : [];
+        // 初期配置は棋譜スナップショットへ直接記録され、_recActを通らない。
+        // それでも「どの頂点/辺を押したか」を研究ログから失わないよう呼出しを補完する。
+        if (!actions.length) actions = [{ a: "invoke", name,
+          args: args.slice(0, 4).map(v => ["string", "number", "boolean"].includes(typeof v) ? v : null) }];
+        if (game) delete game._researchCapture;
+        mpQueuePublish(actor, name, { actor, source: name, actions, before: researchBefore });
+      } else if (MP.active && outer && game) delete game._researchCapture;
     }
   };
   try { eval(name + " = wrapped"); } catch (_) {}
@@ -446,6 +474,7 @@ function mpBuildUi() {
       <button id="mpClose" class="mpclose" aria-label="閉じる">×</button>
       <h2>オンライン対戦</h2>
       <p class="mplead">人間2〜3人で対戦し、残りの席には最強AIが入ります。</p>
+      <p class="mplead">AI改善のため、表示名を除いた対局手順を匿名で保存します。</p>
       <div id="mpJoinPane">
         <label>表示名<input id="mpName" maxlength="20" autocomplete="nickname" placeholder="あなたの名前"></label>
         <label>新しい部屋の構成<select id="mpHumanCount"><option value="3">人間3人＋最強AI1体</option><option value="2">人間2人＋最強AI2体</option></select></label>

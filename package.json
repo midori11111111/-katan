@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node dev-server.js",
-    "check": "node --check api/rooms.js && node --check api/store.js && node --check js/multiplayer.js && node --check js/app.js && node --check js/engine.js && node --check dev-server.js && node verify-roadwin-midturn.js && node verify-roadwin-combinations.js && node verify-settlement-priority.js && node verify-multiplayer-robber-sync.js"
+    "research:export": "node export-research.js",
+    "check": "node --check api/rooms.js && node --check api/research.js && node --check api/store.js && node --check js/multiplayer.js && node --check js/app.js && node --check js/engine.js && node --check dev-server.js && node verify-research-logging.js && node verify-roadwin-midturn.js && node verify-roadwin-combinations.js && node verify-roadwin-record29.js && node verify-forcedwin-general.js && node verify-settlement-priority.js && node verify-multiplayer-robber-sync.js"
   }
 }

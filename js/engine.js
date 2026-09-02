@@ -394,6 +394,7 @@ function _publicActionText(o){
 }
 function _recAct(o){
   if(!game) return;
+  if(Array.isArray(game._researchCapture)) game._researchCapture.push(JSON.parse(JSON.stringify(o)));
   if(!game._acts) game._acts=[];
   if(!game._actionFrames) game._actionFrames=[];
   game._acts.push(o);
@@ -1132,6 +1133,7 @@ function _botDiscard(){ // 捨て: 次の建設の予約分を守り、余剰か
 }
 /* ===== [2026-08-18] ユーザー指定ルール: 道賞の確定取り／手札圧縮の作り直し ===== */
 let ROAD_WIN=false, ROAD_WIN_SEATS=null;
+let FORCED_WIN_SEATS=null;   // コメント由来の一般確定10点探索（席別・可逆）
 let CITY_HOLD_ROLLS=4;
 let TURN_CFG=null;
 function _dbtOf(p){   return (TURN_CFG&&TURN_CFG[p]&&TURN_CFG[p].dbt  !=null)?TURN_CFG[p].dbt  :DEV_BUY_THRESH; }
@@ -1231,13 +1233,16 @@ function _rwBestExtension(p, k, target){
   return best;
 }
 
-function _rwTradePlanForCost(p, hand0, cost){
+function _rwTradePlanForCost(p, hand0, cost, bankUsed){
   const hand=Object.assign({},hand0), trades=[];
+  const reserved=bankUsed||{};
   const need={};
   for(const r of RES5) need[r]=Math.max(0,(cost[r]||0)-(hand[r]||0));
   for(const get of RES5){
     while(need[get]>0){
-      if(bankOf(get)<=trades.filter(t=>t.get===get).length) return null;
+      // 収穫で先に銀行から受け取る分も差し引く。旧版はここを数えず、
+      // 同じ銀行在庫を収穫と交換で二重に使う実行不能プランを許していた。
+      if(bankOf(get)-(reserved[get]||0)<=trades.filter(t=>t.get===get).length) return null;
       let give=null,gr=99;
       for(const r of RES5){
         if(r===get) continue;
@@ -1253,22 +1258,23 @@ function _rwTradePlanForCost(p, hand0, cost){
 }
 function _rwFundingVariants(p){
   const base=Object.assign({},game.hands[p]);
-  const out=[{card:null,picks:[],hand:base,free:game.freeRoads||0}];
+  const out=[{card:null,picks:[],hand:base,free:game.freeRoads||0,bankUsed:{}}];
   if(game.devPlayed || typeof canPlay!=="function") return out;
   try{
-    if(canPlay("roads")) out.push({card:"roads",picks:[],hand:Object.assign({},base),free:(game.freeRoads||0)+2});
+    if(canPlay("roads")) out.push({card:"roads",picks:[],hand:Object.assign({},base),free:(game.freeRoads||0)+2,bankUsed:{}});
     if(canPlay("plenty")){
       for(let i=0;i<RES5.length;i++) for(let j=i;j<RES5.length;j++){
         const a=RES5[i],b=RES5[j];
         if(bankOf(a)<1+(a===b?1:0) || bankOf(b)<1) continue;
         const h=Object.assign({},base); h[a]++; h[b]++;
-        out.push({card:"plenty",picks:[a,b],hand:h,free:game.freeRoads||0});
+        const bankUsed={[a]:1}; bankUsed[b]=(bankUsed[b]||0)+1;
+        out.push({card:"plenty",picks:[a,b],hand:h,free:game.freeRoads||0,bankUsed});
       }
     }
     if(canPlay("mono")) for(const r of RES5){
       let got=0; for(const q of game.order) if(q!==p) got+=game.hands[q][r]||0;
       if(got>0){ const h=Object.assign({},base); h[r]+=got;
-        out.push({card:"mono",picks:[r],hand:h,free:game.freeRoads||0}); }
+        out.push({card:"mono",picks:[r],hand:h,free:game.freeRoads||0,bankUsed:{}}); }
     }
   }catch(e){}
   return out;
@@ -1285,7 +1291,7 @@ function _rwFundingPlan(p,n,extraCost,cardMode){
     const paid=Math.max(0,n-v.free);
     const cost={wood:paid,brick:paid};
     if(extraCost) _rwAddCost(cost,extraCost,1);
-    const tp=_rwTradePlanForCost(p,v.hand,cost);
+    const tp=_rwTradePlanForCost(p,v.hand,cost,v.bankUsed);
     if(!tp) continue;
     // 勝ち手順では、少ない交換回数を最優先。並んだらカードを温存する。
     const score=tp.trades.length*10+(v.card?1:0);
@@ -1316,8 +1322,11 @@ function _rwLegalSettlementChoices(p,n){
   rec(0,[]);
   return answer;
 }
-function _rwWinningBuildPlans(p){
-  const need=Math.max(0,8-vpOf(p));          // 道賞の2点と合わせて10点に必要な建物点
+function _rwWinningBuildPlans(p,bonusVP,withRoadAward){
+  // bonusVP は、このあと確実に入る別の賞（現在は騎士賞）を仮加算する。
+  // 例: 現在5点 → 騎士賞+2 → 開拓地+1 → 道賞+2 = 10点。
+  const roadVP=(withRoadAward===false)?0:2;
+  const need=Math.max(0,game.vpToWin-vpOf(p)-roadVP-(bonusVP||0));
   if(need===0) return [{cities:[],settles:[],cost:{}}];
   const citySlots=Math.max(0,4-placements[p].cities.size);
   const cityTargets=[...placements[p].settlements];
@@ -1345,14 +1354,156 @@ function _rwAffordableRoads(p){
   }
   return {n,funding};
 }
-function _rwNoCardRoadPlan(p,target){
-  const cap=15-placements[p].roads.size;
-  let n=0;
-  for(let k=1;k<=cap;k++){
-    if(!_rwFundingPlan(p,k,null,"none")) break;
-    n=k;
+function _rwKnightWinningPlan(p,target){
+  // 騎士は1ターン1枚の発展カード枠を使うため、その後の資金計画では
+  // 街道建設・収穫・独占を併用しない。建物と通常道路、交換は併用できる。
+  try{
+    if(game.devPlayed || !canPlay("knight")) return null;
+    const armyAfter=(game.army[p]||0)+1, la=game.la.holder;
+    const takesArmy=game.la.holder!==p && armyAfter>=3 && (la==null||armyAfter>(game.army[la]||0));
+    if(!takesArmy) return null;
+    const cap=15-placements[p].roads.size;
+    let n=0;
+    for(let k=1;k<=cap;k++){
+      if(!_rwFundingPlan(p,k,null,"none")) break;
+      n=k;
+    }
+    if(n<=0) return null;
+    const road=_rwBestExtension(p,n,target);
+    if(!road||!road.edges.length) return null;
+    for(const eid of road.edges) placements[p].roads.add(eid);
+    const builds=_rwWinningBuildPlans(p,2);
+    for(const eid of road.edges) placements[p].roads.delete(eid);
+    for(const build of builds){
+      const funding=_rwFundingPlan(p,road.edges.length,build.cost,"none");
+      if(funding) return {road,build,funding};
+    }
+  }catch(e){}
+  return null;
+}
+function _fwFindBuildPlan(p,bonusVP,cardMode,maxRoads){
+  // 「現在の通常評価」ではなく、このターン中に確実に勝つ行動列を直接探す。
+  // 発展カード購入のような結果が不確定な行動は候補へ入れない。
+  const roads=placements[p].roads, chosen=[];
+  const seen=new Set();
+  let answer=null;
+  const inspect=()=>{
+    const builds=_rwWinningBuildPlans(p,bonusVP,false);
+    for(const build of builds){
+      const funding=_rwFundingPlan(p,chosen.length,build.cost,cardMode);
+      if(funding){ answer={edges:chosen.slice(),build,funding}; return true; }
+    }
+    return false;
+  };
+  const rec=()=>{
+    if(inspect()) return true;
+    if(chosen.length>=maxRoads) return false;
+    const key=chosen.slice().sort((a,b)=>a-b).join(",");
+    if(seen.has(key)) return false;
+    seen.add(key);
+    const ranked=[];
+    for(const eid of _rwLegalEdges(p)){
+      roads.add(eid);
+      let opens=0;
+      try{ opens=_rwLegalSettlementChoices(p,1)?.length?1:0; }catch(e){}
+      ranked.push({eid,opens,len:longestRoadOf(p)});
+      roads.delete(eid);
+    }
+    ranked.sort((a,b)=>b.opens-a.opens||b.len-a.len||a.eid-b.eid);
+    for(const x of ranked){
+      roads.add(x.eid); chosen.push(x.eid);
+      if(rec()) return true;
+      chosen.pop(); roads.delete(x.eid);
+    }
+    return false;
+  };
+  rec();
+  // 再帰が勝ちを見つけた時は仮置きした辺を戻してから実行側へ渡す。
+  for(const eid of chosen) roads.delete(eid);
+  return answer;
+}
+function _fwPlayFunding(p,funding){
+  if(funding.card && !game.devPlayed){
+    playDev(funding.card);
+    if(funding.card==="plenty"){
+      for(const r of funding.picks) if(game.ask) resolvePlenty(r);
+    }else if(funding.card==="mono" && game.ask){
+      resolveMono(funding.picks[0]);
+    }
   }
-  return n>0?_rwBestExtension(p,n,target):null;
+  if(game.phase!=="main") return false;
+  for(const t of funding.trades) if(!_tradeBank(p,t.give,t.get)) return false;
+  return true;
+}
+function _fwExecuteBuildPlan(p,plan){
+  if(!plan || !_fwPlayFunding(p,plan.funding)) return false;
+  let acted=0;
+  // 街道建設カードを使った場合も含め、道を先に置いて新しい建設地を開く。
+  for(const eid of plan.edges){
+    if(ownerOf("roads",eid)) continue;
+    if(!(game.freeRoads>0) && !canPay(p,COST.road)) return acted>0;
+    gameClickEdge(eid); acted++;
+    if(game.phase!=="main") return true;
+  }
+  for(const vid of plan.build.cities){
+    if(!canPay(p,COST.city)) return acted>0;
+    gameClickVertex(vid); acted++;
+    if(game.phase!=="main") return true;
+  }
+  for(const vid of plan.build.settles){
+    if(!canPay(p,COST.settlement)) return acted>0;
+    gameClickVertex(vid); acted++;
+    if(game.phase!=="main") return true;
+  }
+  return acted>0;
+}
+function _fwKnightTakesArmy(p){
+  try{
+    if(game.devPlayed || !canPlay("knight") || game.la.holder===p) return false;
+    const after=(game.army[p]||0)+1, h=game.la.holder;
+    return after>=3 && (h==null||after>(game.army[h]||0));
+  }catch(e){ return false; }
+}
+function _fwCouldReachByBuildings(p,bonusVP,allowResourceCard){
+  const gap=Math.max(0,game.vpToWin-vpOf(p)-(bonusVP||0));
+  if(gap<=0) return true;
+  const cityCap=Math.min(4-(placements[p].cities?placements[p].cities.size:0),placements[p].settlements.size);
+  const settleCap=Math.max(0,5-placements[p].settlements.size+cityCap);
+  if(cityCap+settleCap<gap) return false;
+  // 1点に最低4枚（開拓地）、都市化は5枚。交換や道路コストを無視した上界なので、
+  // falseなら絶対に届かない。序盤に道路DFSを走らせないための安全な足切り。
+  let cards=handTotal(p);
+  if(allowResourceCard && !game.devPlayed){
+    try{
+      if(canPlay("plenty")) cards+=2;
+      if(canPlay("mono")){
+        let best=0;
+        for(const r of RES5){ let n=0; for(const q of game.order) if(q!==p) n+=game.hands[q][r]||0; best=Math.max(best,n); }
+        cards+=best;
+      }
+    }catch(e){}
+  }
+  return Math.floor(cards/4)>=gap;
+}
+function _forcedWinRule(p){
+  if(_inPlayout || game.phase!=="main") return false;
+  if(!(ROAD_WIN_SEATS ? ROAD_WIN_SEATS.has(p) : ROAD_WIN)) return false;
+  // 道賞を含む既存の完全探索を最初に使う。
+  if(_roadWinRule(p)) return true;
+  if(!(FORCED_WIN_SEATS && FORCED_WIN_SEATS.has(p))) return false;
+
+  // 騎士賞を取った後、都市・開拓地・そこへ至る道を組み合わせれば確定勝ちになる形。
+  // 盗賊で奪う資源は一切あてにせず、現在の手札だけで完遂できる場合に限る。
+  if(_fwKnightTakesArmy(p) && _fwCouldReachByBuildings(p,2,false)){
+    const kp=_fwFindBuildPlan(p,2,"none",4);
+    if(kp){ playDev("knight"); return true; }
+  }
+
+  // 港/銀行交換、収穫、独占、街道建設、複数建設をまとめて列挙。
+  // 最大4本の新設道路まで扱い、「道→開拓地」の確定勝ちも通常評価より先に実行する。
+  if(!_fwCouldReachByBuildings(p,0,true)) return false;
+  const plan=_fwFindBuildPlan(p,0,undefined,4);
+  return plan ? _fwExecuteBuildPlan(p,plan) : false;
 }
 function _rwOppCanExceed(p, myNewLen){
   for(let q=1;q<=numPlayers;q++){
@@ -1411,12 +1562,9 @@ function _roadWinRule(p){
   // 騎士1枚で騎士賞を確定し、その+2点と道賞+2点で10点になる経路。
   // 騎士使用後はいったん盗賊フェーズへ移るが、処理後のmainで本関数が再度走り道を完遂する。
   try{
-    const armyAfter=(game.army[p]||0)+1, la=game.la.holder;
-    const takesArmy=game.la.holder!==p && armyAfter>=3 && (la==null||armyAfter>(game.army[la]||0));
-    if(!game.devPlayed && canPlay("knight") && takesArmy && vpOf(p)+4>=10){
-      const knightRoad=_rwNoCardRoadPlan(p,target);
-      if(knightRoad&&knightRoad.edges.length){ playDev("knight"); return true; }
-    }
+    // 旧版は「現在6点以上で、騎士賞+道賞だけで10点」の形しか拾えなかった。
+    // 建物を同じターンに挟む確定手順まで資源・交換込みで確認してから騎士を切る。
+    if(_rwKnightWinningPlan(p,target)){ playDev("knight"); return true; }
   }catch(e){}
   const aff=_rwAffordableRoads(p);
   if(aff.n<=0) return false;
@@ -1648,7 +1796,7 @@ function winFullPlayoutSample(base,seed){
   if(!base)return 0;
   const saved={render,updateGamePanel,toast,glog,_recAct,snapshotTurn,random:Math.random,
     inPlayout:_inPlayout,seatAI:(typeof seatAI!=="undefined"?seatAI:null)};
-  const flags={ETA_W,ETA_SEATS,SCARCE_W,SCARCE_SEATS,LOOK_W,LOOK_SEATS,ROAD_WIN_SEATS,TURN_CFG,ROLLOUT_SEATS,
+  const flags={ETA_W,ETA_SEATS,SCARCE_W,SCARCE_SEATS,LOOK_W,LOOK_SEATS,ROAD_WIN_SEATS,FORCED_WIN_SEATS,TURN_CFG,ROLLOUT_SEATS,
     ROAD_PATH_SEATS,ROAD_PORT_W,ROBBER_RP_ARMY,PORT_SYNERGY,HP1_PORT,ROBBER_DELAY,HUMAN_SETUP};
   let winner=0;
   try{
@@ -1663,7 +1811,7 @@ function winFullPlayoutSample(base,seed){
     restoreState(base.snapshot);render=saved.render;updateGamePanel=saved.updateGamePanel;toast=saved.toast;glog=saved.glog;_recAct=saved._recAct;snapshotTurn=saved.snapshotTurn;
     Math.random=saved.random;_inPlayout=saved.inPlayout;if(saved.seatAI)seatAI=saved.seatAI;
     ETA_W=flags.ETA_W;ETA_SEATS=flags.ETA_SEATS;SCARCE_W=flags.SCARCE_W;SCARCE_SEATS=flags.SCARCE_SEATS;LOOK_W=flags.LOOK_W;LOOK_SEATS=flags.LOOK_SEATS;
-    ROAD_WIN_SEATS=flags.ROAD_WIN_SEATS;TURN_CFG=flags.TURN_CFG;ROLLOUT_SEATS=flags.ROLLOUT_SEATS;ROAD_PATH_SEATS=flags.ROAD_PATH_SEATS;ROAD_PORT_W=flags.ROAD_PORT_W;
+    ROAD_WIN_SEATS=flags.ROAD_WIN_SEATS;FORCED_WIN_SEATS=flags.FORCED_WIN_SEATS;TURN_CFG=flags.TURN_CFG;ROLLOUT_SEATS=flags.ROLLOUT_SEATS;ROAD_PATH_SEATS=flags.ROAD_PATH_SEATS;ROAD_PORT_W=flags.ROAD_PORT_W;
     ROBBER_RP_ARMY=flags.ROBBER_RP_ARMY;PORT_SYNERGY=flags.PORT_SYNERGY;HP1_PORT=flags.HP1_PORT;ROBBER_DELAY=flags.ROBBER_DELAY;HUMAN_SETUP=flags.HUMAN_SETUP;
   }
   return winner;
@@ -1806,11 +1954,11 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
                         && !canPay(p,COST.city));
   for(let k=0;k<12;k++){
     if(game.phase!=="main") return;
-    // [ユーザー指定] 道賞の確定取りはターン開始時だけでなく、毎アクション後に再判定する。
-    // 例: 7点で「都市化→8点」、残った木土で1本道を足せば道賞+2＝10点。
-    // 都市・開拓地・交易・カードでVP/手札が変わった直後も、通常評価より先に勝ちを取り切る。
+    // [game28/29コメント由来] ターン開始時と毎アクション後に、確定10点の全手順を再探索する。
+    // 道賞だけでなく、複数交換・複数建設・道→家・収穫/独占/街道建設・騎士賞との複合を含む。
+    // 発展カード購入のような不確定手は除き、確実な勝ちだけを通常評価より先に取り切る。
     try{
-      if(_roadWinRule(p)){
+      if(_forcedWinRule(p)){
         if(game.phase!=="main") return;
         continue;
       }
