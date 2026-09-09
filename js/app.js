@@ -370,6 +370,11 @@ function _applyVariant(seat){
       TURN_CFG={}; TURN_CFG[seat]={dbt:7, cmp:7, holdP:0.5};
       // [2026-08-19] 道の行き先を経路ベースにし、目的地に「使える港」を加える（+6.0pt）
       ROAD_PATH_SEATS=one; ROAD_PORT_W=1;
+      // game36＋固定盤面360試合で採用: 公開9点の最大脅威だけ賞防衛し、
+      // 賞レース時の「港交換→発展購入」を通常候補として比較する。
+      PRIZE_THREAT_SEATS=one; PRIZE_EXACT_SEATS=one;
+      PRIZE_THREAT_MIN_VP_CFG={}; PRIZE_THREAT_MIN_VP_CFG[seat]=9;
+      PRIZE_TRADE_DEV_SEATS=one;
       // 無敵AIだけ本編をロールアウト探索で打つ
       ROLLOUT_SEATS = (k==="invincible") ? one : null;
       // 10万試合で採用した対象者先決め＋騎士賞見込み盗賊（最強AI/無敵AIのみ）
@@ -378,6 +383,8 @@ function _applyVariant(seat){
       ETA_W=0; ETA_SEATS=null; SCARCE_W=0; SCARCE_SEATS=null; LOOK_W=0; LOOK_SEATS=null;
       ROAD_WIN_SEATS=null; FORCED_WIN_SEATS=null; TURN_CFG=null; ROLLOUT_SEATS=null;
       ROAD_PATH_SEATS=null; ROAD_PORT_W=0;
+      PRIZE_THREAT_SEATS=null; PRIZE_EXACT_SEATS=null;
+      PRIZE_THREAT_MIN_VP_CFG=null; PRIZE_TRADE_DEV_SEATS=null;
       ROBBER_RP_ARMY=false;
     }
   }catch(e){}

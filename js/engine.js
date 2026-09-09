@@ -918,6 +918,10 @@ function _canCompleteByTrade(p, costObj){
 // 積極ビルド（資源を寝かせずバーストで失う前に使う）のオン/オフ
 let AGGRO_TRADE=true;
 let STEAL_PRIZE=true;    // リーダー(VP9以上)の道賞/騎士賞を届く範囲で奪い返す（A/B検証済み: 20盤面で約51%と有意）
+let PRIZE_THREAT_SEATS=null;       // 最大脅威の賞保持者だけを防衛する席
+let PRIZE_EXACT_SEATS=null;        // 実際に賞を移せる辺だけを使う席
+let PRIZE_THREAT_MIN_VP_CFG=null;  // 席別の公開VP発火点
+let PRIZE_TRADE_DEV_SEATS=null;    // 賞レース時の交換→発展を通常候補へ足す席
 let PROTECT_CITY_RESERVE=false;   // 実験済み: 全10盤面で悪化(48.0%)のため不採用
 let DEV_BUY_THRESH=5;   // カード購入(あふれ防止)を発動する手札枚数の閾値
 let SETTLE_FLOOR=2;   // 家を2軒維持（A/B検証済み: 20盤面で約52.65%・ダイスも81-84に短縮）
@@ -1797,7 +1801,8 @@ function winFullPlayoutSample(base,seed){
   const saved={render,updateGamePanel,toast,glog,_recAct,snapshotTurn,random:Math.random,
     inPlayout:_inPlayout,seatAI:(typeof seatAI!=="undefined"?seatAI:null)};
   const flags={ETA_W,ETA_SEATS,SCARCE_W,SCARCE_SEATS,LOOK_W,LOOK_SEATS,ROAD_WIN_SEATS,FORCED_WIN_SEATS,TURN_CFG,ROLLOUT_SEATS,
-    ROAD_PATH_SEATS,ROAD_PORT_W,ROBBER_RP_ARMY,PORT_SYNERGY,HP1_PORT,ROBBER_DELAY,HUMAN_SETUP};
+    ROAD_PATH_SEATS,ROAD_PORT_W,PRIZE_THREAT_SEATS,PRIZE_EXACT_SEATS,PRIZE_THREAT_MIN_VP_CFG,PRIZE_TRADE_DEV_SEATS,
+    ROBBER_RP_ARMY,PORT_SYNERGY,HP1_PORT,ROBBER_DELAY,HUMAN_SETUP};
   let winner=0;
   try{
     render=()=>{};updateGamePanel=()=>{};toast=()=>{};glog=()=>{};_recAct=()=>{};snapshotTurn=()=>{};
@@ -1812,6 +1817,7 @@ function winFullPlayoutSample(base,seed){
     Math.random=saved.random;_inPlayout=saved.inPlayout;if(saved.seatAI)seatAI=saved.seatAI;
     ETA_W=flags.ETA_W;ETA_SEATS=flags.ETA_SEATS;SCARCE_W=flags.SCARCE_W;SCARCE_SEATS=flags.SCARCE_SEATS;LOOK_W=flags.LOOK_W;LOOK_SEATS=flags.LOOK_SEATS;
     ROAD_WIN_SEATS=flags.ROAD_WIN_SEATS;FORCED_WIN_SEATS=flags.FORCED_WIN_SEATS;TURN_CFG=flags.TURN_CFG;ROLLOUT_SEATS=flags.ROLLOUT_SEATS;ROAD_PATH_SEATS=flags.ROAD_PATH_SEATS;ROAD_PORT_W=flags.ROAD_PORT_W;
+    PRIZE_THREAT_SEATS=flags.PRIZE_THREAT_SEATS;PRIZE_EXACT_SEATS=flags.PRIZE_EXACT_SEATS;PRIZE_THREAT_MIN_VP_CFG=flags.PRIZE_THREAT_MIN_VP_CFG;PRIZE_TRADE_DEV_SEATS=flags.PRIZE_TRADE_DEV_SEATS;
     ROBBER_RP_ARMY=flags.ROBBER_RP_ARMY;PORT_SYNERGY=flags.PORT_SYNERGY;HP1_PORT=flags.HP1_PORT;ROBBER_DELAY=flags.ROBBER_DELAY;HUMAN_SETUP=flags.HUMAN_SETUP;
   }
   return winner;
@@ -1932,6 +1938,48 @@ function challengerMainRollout(p){
     if(!_applyCandVal(p, best.forced)) { _baseBotMain(p); return; }              // この手を打って次の手を探索
     if(game.phase!=="main") return;
   }
+}
+
+// game36で露呈した旧STEAL_PRIZEの過剰上書きを狭める。
+// 相手の伏せVPは見ず、公開9点以上かつ最大脅威の賞保持者だけを対象にし、
+// 道はその1本で本当に現在の最長路を上回れる場合だけ置く。
+function _prizeThreatDefense(p,adv){
+  const minVP=(PRIZE_THREAT_MIN_VP_CFG&&PRIZE_THREAT_MIN_VP_CFG[p]!=null)?PRIZE_THREAT_MIN_VP_CFG[p]:9;
+  const holders=new Set();
+  if(game.lr&&game.lr.holder&&game.lr.holder!==p&&_rpVisibleVP(game.lr.holder)>=minVP)holders.add(game.lr.holder);
+  if(game.la&&game.la.holder&&game.la.holder!==p&&_rpVisibleVP(game.la.holder)>=minVP)holders.add(game.la.holder);
+  if(!holders.size)return false;
+  let threat={};try{threat=_rpRouteThreatVector(_rpArmyShareVector());}catch(e){}
+  const opp=game.order.filter(q=>q!==p);let top=opp[0],best=-Infinity;
+  for(const q of opp){const s=(threat[q]||0)+0.0001*_rpVisibleVP(q);if(s>best){best=s;top=q;}}
+  if(!holders.has(top))return false;
+  if(game.lr.holder===top&&placements[p].roads.size<15&&_canCompleteByTrade(p,COST.road)){
+    let eid=null;
+    if(PRIZE_EXACT_SEATS&&PRIZE_EXACT_SEATS.has(p)){
+      let pl=null;try{pl=_rwBestExtension(p,1,game.lr.len+1);}catch(e){}
+      if(pl&&pl.edges&&pl.edges.length===1)eid=pl.edges[0];
+    }else{
+      const ri=adv&&adv.find(x=>x.label.startsWith("道")&&x.target&&x.target.id!=null);
+      if(longestRoadOf(p)>=game.lr.len-1&&ri)eid=ri.target.id;
+    }
+    if(eid!=null){_tradeToward(p,COST.road);if(canPay(p,COST.road)){gameClickEdge(eid);return true;}}
+  }
+  if(game.la.holder===top&&!game.devPlayed&&canPlay("knight")&&game.army[p]+1>game.army[top]){
+    playDev("knight");return true;
+  }
+  return false;
+}
+
+// 全局面で交換カードを許すと悪化するため、都市あり・公開5点以上・完成建設なし・
+// 道賞/騎士賞へ近い時だけ、通常候補として比較する。
+function _prizeTradeDevEligible(p){
+  if(!(PRIZE_TRADE_DEV_SEATS&&PRIZE_TRADE_DEV_SEATS.has(p)))return false;
+  if(!game.dev.deck.length||placements[p].cities.size<1||canPay(p,COST.dev)||!_canCompleteByTrade(p,COST.dev))return false;
+  if(canPay(p,COST.city)||canPay(p,COST.settlement)||_rpVisibleVP(p)<5)return false;
+  let nearRoad=false,nearArmy=false;
+  try{const target=game.lr.holder&&game.lr.holder!==p?game.lr.len+1:5;nearRoad=game.lr.holder!==p&&longestRoadOf(p)>=target-1;}catch(e){}
+  try{const target=game.la.holder&&game.la.holder!==p?game.la.count+1:3;const held=(game.dev.hands[p]&&game.dev.hands[p].knight)||0;nearArmy=game.la.holder!==p&&(game.army[p]||0)+held>=target-2;}catch(e){}
+  return nearRoad||nearArmy;
 }
 
 function _botMain(p){ // 建設フェーズ: 提案リストに従って行動（最大12手）
@@ -2076,8 +2124,11 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
         }
       }
     }
-    // ===== 妨害: もうすぐ勝ちそうな相手(VP8+)が道賞/騎士賞を持っているなら、届く範囲で奪い返す =====
+    // ===== 妨害: 最大脅威の賞保持者だけを、賞へ直結する手で止める =====
     if(typeof STEAL_PRIZE!=="undefined" && STEAL_PRIZE && AGGRO_TRADE){
+      if(PRIZE_THREAT_SEATS&&PRIZE_THREAT_SEATS.has(p)){
+        if(_prizeThreatDefense(p,adv))continue;
+      }else{
       let stole=false;
       for(const q of game.order){
         if(q===p) continue;
@@ -2100,6 +2151,7 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
         }
       }
       if(stole) continue;
+      }
     }
     let a=adv.find(x=>x.can);
     // 開拓地の資源と合法な建設地が揃っているのに、先に道やカードへ木土羊麦を使って
@@ -2245,6 +2297,10 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
     else if(a.label.startsWith("余り資源を交換して今すぐ開拓地")){ if(_tryTradeForCost(p,COST.settlement)&&a.target) gameClickVertex(a.target.id); else return; }
     else if(a.label.startsWith("開拓地")) gameClickVertex(a.target.id);
     else if(a.label.startsWith("道")) gameClickEdge(a.target.id);
+    else if(a.label.startsWith("交換して発展カード")){
+      _tradeToward(p,COST.dev);
+      if(!_hoardOre&&!_wrPhase1&&canPay(p,COST.dev))buyDev();else return;
+    }
     else if(a.label.startsWith("発展カード")){ if(!_hoardOre && !_wrPhase1) buyDev(); }
     else if(a.label.includes("に交換")){ const _nr=a._needRes||"ore"; for(const r of ["sheep","wood","brick"]){ if(game.hands[p][r]>=rateFor(p,r)) { _tradeBank(p,r,_nr); break; } } }
     else return;
@@ -3921,6 +3977,10 @@ function computeAdvice(){
       }
     }
     list.push({score:devScore, can:canPay(p,COST.dev), target:null, label:"発展カードを買う"+devNote, cost:"羊+小麦+鉱石"});
+    if(_prizeTradeDevEligible(p)){
+      list.push({score:devScore, can:true, target:null,
+        label:"交換して発展カードを買う（賞レース）"+devNote, cost:"交換＋羊+小麦+鉱石"});
+    }
   }
 
   // --- 余り資源を鉄麦に（バースト対策・鉄不足なら特に） ---
