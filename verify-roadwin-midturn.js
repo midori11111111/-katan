@@ -28,6 +28,10 @@ const after={vp:vpOf(1),roads:longestRoadOf(1),holder:game.lr.holder,phase:game.
 if(before.vp!==7 || before.roads!==4 || after.vp!==10 || after.roads!==5 || after.holder!==1 || after.phase!=="over" || after.cities!==3){
   throw new Error("都市化後に道賞即勝ちを取り切れませんでした: "+JSON.stringify({before,after}));
 }
+const buildLog=game.log.map(x=>x.msg).filter(x=>x.includes("都市化")||x.includes("道を建設"));
+if(buildLog.some(x=>x.includes("AI最善は")||x.includes("AI推奨とは別")) || buildLog.some(x=>!x.includes("AI最終判断・おすすめ"))){
+  throw new Error("実戦AIの最終判断と表示用おすすめが再び食い違っています: "+JSON.stringify(buildLog));
+}
 console.log("roadwin-midturn ok:", JSON.stringify({before,after,log:game.log.map(x=>x.msg)}));
 `;
 

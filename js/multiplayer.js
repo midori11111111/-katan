@@ -315,7 +315,7 @@ function mpSerialize() {
   delete gameCopy._researchCapture;
   return {
     schema: 1,
-    policyVersion: "20260903b",
+    policyVersion: "20260929a",
     board: JSON.parse(JSON.stringify(board)),
     ports: JSON.parse(JSON.stringify(ports)),
     placements: pl,

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "run": "2026-09-26T08-00-11-086Z-gen0-e60077",
+  "blend": 0.5,
+  "enabled": true,
+  "policy": "first-placement-plus-p1-conditional-second",
+  "evaluation": {
+    "seed": 99101,
+    "boards": 400,
+    "futures": 10,
+    "games": 24000,
+    "wins": 12353,
+    "rate": 0.5147083333333333,
+    "boardClustered95CI": [0.508268035035025, 0.5211486316316416],
+    "meanVpDiff": 0.089
+  }
+}

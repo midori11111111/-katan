@@ -8,139 +8,101 @@ const RES_JP = {wood:"木",brick:"レンガ",sheep:"羊",wheat:"小麦",ore:"鉱
 const RES_COUNTS = {wood:4,sheep:4,wheat:4,brick:3,ore:3,desert:1};
 const TOKENS = [2,3,3,4,4,5,5,6,6,8,8,9,9,10,10,11,11,12];
 const PIP = {2:1,3:2,4:3,5:4,6:5,8:5,9:4,10:3,11:2,12:1};
-// ===== 挑戦者AI（高速simロールアウトMCTS）ここから =====
-// ============================================================
-//  高速ロールアウトMCTS（アプリ埋め込み用・_fs接頭辞で名前衝突を回避）
-//  GEO / board / ports / placements / game / occupantOf はHTML側のグローバルを使う。
-// ============================================================
+// ===== 配置蒸留器（cpure） =====
+// 旧ブラウザ内フルMCTSは現行UIから到達不能になったため削除。
+// cpure が使う盤面変換・16特徴の線形モデルだけを保持する。
 const _FS_PIP = [0, 0, 1, 2, 3, 4, 5, 0, 5, 4, 3, 2, 1];
-const _fsNV = GEO.vertices.length, _fsNE = GEO.edges.length, _fsNH = GEO.hexes.length;
-const _fsVHexes = [], _fsVAdj = [], _fsVEdges = [];
-for (let v = 0; v < _fsNV; v++) { _fsVHexes[v] = (GEO.vertex_hexes[v] || []).slice(); _fsVAdj[v] = (GEO.vertex_neighbors[v] || []).slice(); _fsVEdges[v] = []; }
+const _fsNV = GEO.vertices.length, _fsNH = GEO.hexes.length;
+const _fsVHexes = [], _fsVAdj = [];
+for (let v = 0; v < _fsNV; v++) {
+  _fsVHexes[v] = (GEO.vertex_hexes[v] || []).slice();
+  _fsVAdj[v] = (GEO.vertex_neighbors[v] || []).slice();
+}
 const _fsEEnds = GEO.edges.map(e => [e.a, e.b]);
-for (let e = 0; e < _fsNE; e++) { _fsVEdges[_fsEEnds[e][0]].push(e); _fsVEdges[_fsEEnds[e][1]].push(e); }
-const _fsHVerts = []; for (let h = 0; h < _fsNH; h++) _fsHVerts[h] = [];
-for (let v = 0; v < _fsNV; v++) for (const h of _fsVHexes[v]) _fsHVerts[h].push(v);
-
-let FAST_MCTS_M_HTML = 100, FAST_MCTS_TOP_HTML = 8;
-
-function _fsShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
-function _fsMakeDeck() { const d = []; for (let i = 0; i < 14; i++) d.push(0); for (let i = 0; i < 5; i++) d.push(1); for (let i = 0; i < 2; i++) { d.push(2); d.push(3); d.push(4); } return _fsShuffle(d); }
-function _fsNewGame(b) {
-  return { res: b.res, num: b.num, pip: b.pip, portOf: b.portOf, robber: b.robber,
-    vOwner: new Int8Array(_fsNV), vCity: new Uint8Array(_fsNV), eOwner: new Int8Array(_fsNE),
-    hand: [null, new Int32Array(5), new Int32Array(5), new Int32Array(5), new Int32Array(5)],
-    vp: [0, 0, 0, 0, 0], devVp: [0, 0, 0, 0, 0], army: [0, 0, 0, 0, 0],
-    roads: [0, 0, 0, 0, 0], lrLen: [0, 0, 0, 0, 0], lrHolder: 0, laHolder: 0,
-    builds: [null, [], [], [], []], deck: _fsMakeDeck() };
+function _fsLegal(g, v) {
+  if (g.vOwner[v]) return false;
+  for (const n of _fsVAdj[v]) if (g.vOwner[n]) return false;
+  return true;
 }
-function _fsVpip(g, v) { let s = 0; const hs = _fsVHexes[v]; for (let i = 0; i < hs.length; i++) { const h = hs[i]; if (g.res[h] >= 0) s += g.pip[h]; } return s; }
-function _fsLegal(g, v) { if (g.vOwner[v]) return false; const nb = _fsVAdj[v]; for (let i = 0; i < nb.length; i++) if (g.vOwner[nb[i]]) return false; return true; }
-function _fsHandTotal(g, p) { const h = g.hand[p]; return h[0] + h[1] + h[2] + h[3] + h[4]; }
-function _fsTotalVP(g, p) { return g.vp[p] + g.devVp[p] + (g.lrHolder === p ? 2 : 0) + (g.laHolder === p ? 2 : 0); }
-function _fsRate(g, p, r) { let rt = 4; const bs = g.builds[p]; for (let i = 0; i < bs.length; i++) { const pt = g.portOf[bs[i]]; if (pt === 5 && rt > 3) rt = 3; if (pt === r && rt > 2) rt = 2; } return rt; }
-function _fsDistribute(g, roll) { for (let h = 0; h < _fsNH; h++) { if (g.num[h] !== roll || h === g.robber || g.res[h] < 0) continue; const r = g.res[h], vs = _fsHVerts[h]; for (let i = 0; i < vs.length; i++) { const o = g.vOwner[vs[i]]; if (o) g.hand[o][r] += g.vCity[vs[i]] ? 2 : 1; } } }
-function _fsEdgeConn(g, p, e) { const a = _fsEEnds[e][0], b = _fsEEnds[e][1]; if (g.vOwner[a] === p || g.vOwner[b] === p) return true; for (let k = 0; k < 2; k++) { const v = k ? b : a; if (g.vOwner[v] && g.vOwner[v] !== p) continue; const es = _fsVEdges[v]; for (let i = 0; i < es.length; i++) if (es[i] !== e && g.eOwner[es[i]] === p) return true; } return false; }
-function _fsConnRoad(g, p, v) { const es = _fsVEdges[v]; for (let i = 0; i < es.length; i++) if (g.eOwner[es[i]] === p) return true; return false; }
-function _fsBestRoad(g, p) { let be = -1, bs = 0; for (let e = 0; e < _fsNE; e++) { if (g.eOwner[e] || !_fsEdgeConn(g, p, e)) continue; const a = _fsEEnds[e][0], b = _fsEEnds[e][1]; let sc = 0; for (let k = 0; k < 2; k++) { const fv = k ? b : a; if (g.vOwner[fv]) continue; if (_fsLegal(g, fv)) { const pp = _fsVpip(g, fv); if (pp > sc) sc = pp; } const nb = _fsVAdj[fv]; for (let i = 0; i < nb.length; i++) { const n2 = nb[i]; if (_fsLegal(g, n2)) { const pp = _fsVpip(g, n2) * 0.7; if (pp > sc) sc = pp; } } } if (sc > bs) { bs = sc; be = e; } } return be; }
-function _fsTradeToward(g, p, cost) { const h = g.hand[p]; let guard = 0; while (guard++ < 8) { let need = -1; for (let r = 0; r < 5; r++) if (h[r] < cost[r]) { need = r; break; } if (need < 0) return true; let did = false; for (let r = 0; r < 5; r++) { if (r === need) continue; const rt = _fsRate(g, p, r); if (h[r] - rt >= cost[r]) { h[r] -= rt; h[need]++; did = true; break; } } if (!did) return false; } return false; }
-function _fsTrail(g, p) { const radj = {}; for (let e = 0; e < _fsNE; e++) { if (g.eOwner[e] !== p) continue; const a = _fsEEnds[e][0], b = _fsEEnds[e][1]; (radj[a] = radj[a] || []).push([e, b]); (radj[b] = radj[b] || []).push([e, a]); } let best = 0; const used = new Set(); function dfs(v, len) { if (len > best) best = len; const lst = radj[v]; if (!lst) return; for (let i = 0; i < lst.length; i++) { const e = lst[i][0], o = lst[i][1]; if (used.has(e)) continue; if (g.vOwner[v] && g.vOwner[v] !== p && len > 0) continue; used.add(e); dfs(o, len + 1); used.delete(e); } } for (const vs in radj) dfs(+vs, 0); return best; }
-function _fsUpdLR(g, p) { g.lrLen[p] = _fsTrail(g, p); let mx = 0, who = 0; for (let q = 1; q <= 4; q++) if (g.lrLen[q] > mx) { mx = g.lrLen[q]; who = q; } if (mx >= 5) g.lrHolder = who; }
-function _fsAddSettle(g, p, v) { g.vOwner[v] = p; g.vp[p] += 1; g.builds[p].push(v); }
-function _fsBuyDev(g, p) { const h = g.hand[p]; h[2]--; h[3]--; h[4]--; const c = g.deck.pop(); if (c === 0) { g.army[p]++; if (g.army[p] >= 3 && g.army[p] > g.army[g.laHolder || 0]) g.laHolder = p; } else if (c === 1) g.devVp[p]++; else if (c === 2) { const e1 = _fsBestRoad(g, p); if (e1 >= 0) { g.eOwner[e1] = p; g.roads[p]++; } const e2 = _fsBestRoad(g, p); if (e2 >= 0) { g.eOwner[e2] = p; g.roads[p]++; } _fsUpdLR(g, p); } else if (c === 3) { h[4]++; h[3]++; } else if (c === 4) { let t = 0; for (let q = 1; q <= 4; q++) if (q !== p) { t += g.hand[q][4]; g.hand[q][4] = 0; } h[4] += t; } }
-function _fsPolicy(g, p) {
-  for (let iter = 0; iter < 14; iter++) {
-    const h = g.hand[p];
-    if (h[3] >= 2 && h[4] >= 3) { let bv = -1, bp = -1; const bs = g.builds[p]; for (let i = 0; i < bs.length; i++) { const v = bs[i]; if (!g.vCity[v]) { const pp = _fsVpip(g, v); if (pp > bp) { bp = pp; bv = v; } } } if (bv >= 0) { h[3] -= 2; h[4] -= 3; g.vCity[bv] = 1; g.vp[p] += 1; if (_fsTotalVP(g, p) >= 10) return; continue; } }
-    let sV = -1, sP = -1; for (let v = 0; v < _fsNV; v++) { if (_fsLegal(g, v) && _fsConnRoad(g, p, v)) { const pp = _fsVpip(g, v); if (pp > sP) { sP = pp; sV = v; } } }
-    if (sV >= 0 && h[0] >= 1 && h[1] >= 1 && h[2] >= 1 && h[3] >= 1) { h[0]--; h[1]--; h[2]--; h[3]--; _fsAddSettle(g, p, sV); if (_fsTotalVP(g, p) >= 10) return; continue; }
-    if (h[0] >= 1 && h[1] >= 1 && g.roads[p] < 15) { const e = _fsBestRoad(g, p); if (e >= 0) { h[0]--; h[1]--; g.eOwner[e] = p; g.roads[p]++; _fsUpdLR(g, p); continue; } }
-    if (g.deck.length && h[2] >= 1 && h[3] >= 1 && h[4] >= 1 && (_fsHandTotal(g, p) > 7 || _fsTotalVP(g, p) >= 8)) { _fsBuyDev(g, p); if (_fsTotalVP(g, p) >= 10) return; continue; }
-    let hasS = false; const b2 = g.builds[p]; for (let i = 0; i < b2.length; i++) if (!g.vCity[b2[i]]) { hasS = true; break; }
-    let target = null; if (hasS) target = [0, 0, 0, 2, 3]; else if (sV >= 0) target = [1, 1, 1, 1, 0];
-    if (target && _fsTradeToward(g, p, target)) continue;
-    if (g.deck.length && h[2] >= 1 && h[3] >= 1 && h[4] >= 1) { _fsBuyDev(g, p); if (_fsTotalVP(g, p) >= 10) return; continue; }
-    break;
-  }
-}
-function _fsRobber7(g, cur) {
-  for (let q = 1; q <= 4; q++) { let t = _fsHandTotal(g, q); if (t > 7) { let d = t >> 1; while (d > 0) { let br = 0, bm = -1; for (let r = 0; r < 5; r++) if (g.hand[q][r] > bm) { bm = g.hand[q][r]; br = r; } if (bm <= 0) break; g.hand[q][br]--; d--; } } }
-  let bh = g.robber, bsc = -1e9; for (let h = 0; h < _fsNH; h++) { if (h === g.robber || g.res[h] < 0) continue; let s = 0, self = false; const vs = _fsHVerts[h]; for (let i = 0; i < vs.length; i++) { const o = g.vOwner[vs[i]]; if (o) { if (o === cur) self = true; else s += g.pip[h] * (g.vCity[vs[i]] ? 2 : 1); } } if (self) s -= 100; if (s > bsc) { bsc = s; bh = h; } } g.robber = bh;
-  const vic = []; const vs = _fsHVerts[bh]; for (let i = 0; i < vs.length; i++) { const o = g.vOwner[vs[i]]; if (o && o !== cur && _fsHandTotal(g, o) > 0) vic.push(o); }
-  if (vic.length) { const t = vic[Math.random() * vic.length | 0]; const pool = []; for (let r = 0; r < 5; r++) for (let i = 0; i < g.hand[t][r]; i++) pool.push(r); if (pool.length) { const r = pool[Math.random() * pool.length | 0]; g.hand[t][r]--; g.hand[cur][r]++; } }
-}
-const _FS_SNAKE = [1, 2, 3, 4, 4, 3, 2, 1];
-function _fsPlaceAt(g, p, v, second) { _fsAddSettle(g, p, v); if (second) { const hs = _fsVHexes[v]; for (let i = 0; i < hs.length; i++) { const hx = hs[i]; if (g.res[hx] >= 0) g.hand[p][g.res[hx]] += 1; } } let be = -1, bs = -1; const es = _fsVEdges[v]; for (let i = 0; i < es.length; i++) { const e = es[i]; if (g.eOwner[e]) continue; const a = _fsEEnds[e][0], b = _fsEEnds[e][1]; const fv = a === v ? b : a; const pp = _fsVpip(g, fv); if (pp > bs) { bs = pp; be = e; } } if (be >= 0) { g.eOwner[be] = p; g.roads[p]++; } }
-function _fsSimplePick(g) { let bv = -1, bp = -1; for (let v = 0; v < _fsNV; v++) { if (!_fsLegal(g, v)) continue; let pp = _fsVpip(g, v); if (g.portOf[v] >= 0) pp += 1; if (pp > bp) { bp = pp; bv = v; } } if (bv < 0) for (let v = 0; v < _fsNV; v++) if (_fsLegal(g, v)) { bv = v; break; } return bv; }
-function _fsClone(g) { return { res: g.res, num: g.num, pip: g.pip, portOf: g.portOf, robber: g.robber, vOwner: g.vOwner.slice(), vCity: g.vCity.slice(), eOwner: g.eOwner.slice(), hand: [null, g.hand[1].slice(), g.hand[2].slice(), g.hand[3].slice(), g.hand[4].slice()], vp: g.vp.slice(), devVp: g.devVp.slice(), army: g.army.slice(), roads: g.roads.slice(), lrLen: g.lrLen.slice(), lrHolder: g.lrHolder, laHolder: g.laHolder, builds: [null, g.builds[1].slice(), g.builds[2].slice(), g.builds[3].slice(), g.builds[4].slice()], deck: g.deck.slice() }; }
-function _fsPlayMain(g) { let cur = 0; for (let turn = 0; turn < 1000; turn++) { const p = cur + 1; const roll = 2 + (Math.random() * 6 | 0) + (Math.random() * 6 | 0); if (roll === 7) _fsRobber7(g, p); else _fsDistribute(g, roll); _fsPolicy(g, p); if (_fsTotalVP(g, p) >= 10) return p; cur = (cur + 1) & 3; } let w = 1, bv = -1; for (let q = 1; q <= 4; q++) { const v = _fsTotalVP(g, q); if (v > bv) { bv = v; w = q; } } return w; }
-function _fsRunSetup(g, fromStep, cnt) { for (let s = fromStep; s < _FS_SNAKE.length; s++) { const p = _FS_SNAKE[s], second = cnt[p] === 1; _fsPlaceAt(g, p, _fsSimplePick(g), second); cnt[p]++; } }
-function _fsMctsPick(g, p, s, cnt, M, topN) { const arr = []; for (let v = 0; v < _fsNV; v++) if (_fsLegal(g, v)) arr.push([_fsVpip(g, v), v]); arr.sort((a, b) => b[0] - a[0]); const cands = arr.slice(0, topN).map(x => x[1]); let best = cands[0], bw = -1; for (const v of cands) { let w = 0; for (let i = 0; i < M; i++) { const gg = _fsClone(g); const cc = cnt.slice(); _fsPlaceAt(gg, p, v, cnt[p] === 1); cc[p]++; _fsRunSetup(gg, s + 1, cc); if (_fsPlayMain(gg) === p) w++; } if (w > bw) { bw = w; best = v; } } return best; }
 function _fsFromHeavy() {
   const RESIDX = { wood: 0, brick: 1, sheep: 2, wheat: 3, ore: 4 };
   const res = new Int8Array(_fsNH), num = new Int8Array(_fsNH), pip = new Int8Array(_fsNH);
-  for (let h = 0; h < _fsNH; h++) { const b = board[h]; if (!b || b.resource === 'desert' || !b.number) { res[h] = -1; num[h] = 0; pip[h] = 0; } else { res[h] = RESIDX[b.resource]; num[h] = b.number; pip[h] = _FS_PIP[b.number]; } }
+  for (let h = 0; h < _fsNH; h++) {
+    const b = board[h];
+    if (!b || b.resource === "desert" || !b.number) { res[h] = -1; continue; }
+    res[h] = RESIDX[b.resource]; num[h] = b.number; pip[h] = _FS_PIP[b.number];
+  }
   const portOf = new Int8Array(_fsNV).fill(-1);
-  for (const eid in ports) { const t = ports[eid]; const e = _fsEEnds[Number(eid)]; if (!e) continue; const code = t === '3:1' ? 5 : (RESIDX[t] != null ? RESIDX[t] : -1); if (code >= 0) { portOf[e[0]] = code; portOf[e[1]] = code; } }
-  const g = _fsNewGame({ res, num, pip, robber: (game && game.robber) || 0, portOf });
-  for (let p = 1; p <= 4; p++) { const pl = placements[p]; if (!pl) continue; if (pl.settlements) for (const v of pl.settlements) { g.vOwner[v] = p; g.builds[p].push(v); g.vp[p] += 1; } if (pl.cities) for (const v of pl.cities) { g.vOwner[v] = p; g.vCity[v] = 1; g.builds[p].push(v); g.vp[p] += 2; } if (pl.roads) for (const e of pl.roads) { g.eOwner[e] = p; g.roads[p]++; } const hd = game && game.hands ? game.hands[p] : null; if (hd) { g.hand[p][0] = hd.wood || 0; g.hand[p][1] = hd.brick || 0; g.hand[p][2] = hd.sheep || 0; g.hand[p][3] = hd.wheat || 0; g.hand[p][4] = hd.ore || 0; } }
+  for (const eid in ports) {
+    const type = ports[eid], edge = _fsEEnds[Number(eid)];
+    if (!edge) continue;
+    const code = type === "3:1" ? 5 : (RESIDX[type] ?? -1);
+    if (code >= 0) { portOf[edge[0]] = code; portOf[edge[1]] = code; }
+  }
+  const g = {res, num, pip, portOf, vOwner:new Int8Array(_fsNV),
+    vCity:new Uint8Array(_fsNV), builds:[null, [], [], [], []]};
+  for (let q = 1; q <= 4; q++) {
+    const pl = placements[q]; if (!pl) continue;
+    for (const v of pl.settlements || []) { g.vOwner[v] = q; g.builds[q].push(v); }
+    for (const v of pl.cities || []) { g.vOwner[v] = q; g.vCity[v] = 1; g.builds[q].push(v); }
+  }
   return g;
 }
-// アプリから呼ぶ: 席spの初期配置を高速simロールアウトMCTSで選ぶ
-function fastMctsPickHTML(sp) {
-  try {
-    const g = _fsFromHeavy();
-    const cnt = [0, 0, 0, 0, 0];
-    for (let q = 1; q <= 4; q++) { if (placements[q]) cnt[q] = placements[q].settlements.size + (placements[q].cities ? placements[q].cities.size : 0); }
-    const s = (game && game.setup ? game.setup.step : 0);
-    const v = _fsMctsPick(g, sp, s, cnt, FAST_MCTS_M_HTML, FAST_MCTS_TOP_HTML);
-    if (v == null || occupantOf(v)) return null;
-    for (const n of (GEO.vertex_neighbors[String(v)] || [])) if (occupantOf(n)) return null;
-    return v;
-  } catch (e) { return null; }
-}
 
-// [HP1] 港シナジー: 配置席が"他の家"で産む港資源pip(=余剰)で港を加点（人間模倣のみON）。
-//   distillのportMatch特徴は"この頂点自身が港資源を産むか"しか見ず、強い麦港を過小評価する。
-//   人間の物差しで検証済み(麦港v38が5位→上位へ, 自己対戦51.7%)。人間由来なので変種フラグで席別ON/OFF。
+// 港シナジー: 他の家で産む港資源pip（余剰）を加点する。
 let HP1_PORT = true; let HP1_PORT_W = 0.012;
-// ---- 蒸留評価器（16特徴・両軒対応・プレイアウト不要で一瞬）----
-//  _FS_DISTILL_W = 自己対戦66%再現の重み。「挑戦者(関与なし)=cpure」の配置に使う純・自己対戦モデル(人間データ不使用)。
 const _FS_DISTILL_W = [-0.3164309691450159, 0.01382550407550897, -0.0018099433636406563, 0.0025212641131526965, 0.005186137922594357, 0.013799368662142665, -0.0008417492162801521, 0.06373542421602327, 0.059950619605857625, 0.014290710482826393, 0.02407666200321394, 0.001697021076044727, 0.01983209143632298, 0.008970709907792683, -0.014287769963356333, 0.0010147174751369604, 0.2641943120217746];
-//  _FS_DISTILL_W_BC = behavioral cloning重み（記録棋譜14手で人間一致再蒸留: distill top3 50%→ in-sample100%/LOGO71%）。
-//   人間由来。将来「人間模倣」を重いcomputeBestから高速distillへ切替える時用に保管。再学習: node bclone.js。
-const _FS_DISTILL_W_BC = [-0.3164309691450159, 0.03363322992911555, 0.01290754873525962, 0.030466066932211038, 0.008799106848590964, 0.022259377050732214, -0.0018168694139962633, 0.11267761151062815, 0.02888229870813685, 0.01839872823546419, 0.04232914601951257, 0.001697021076044727, 0.057008785561947134, 0.02642374645797298, -0.02038613056838122, 0.030156296561484556, 0.25539921498070184];
 function _fsFeatH(g, v, p) {
-  let pip = 0, po = 0, pw = 0, pwo = 0, pb = 0, ps = 0; const res = {}; const numCount = {}; const rp = {};
-  const hs = _fsVHexes[v];
-  for (let i = 0; i < hs.length; i++) { const h = hs[i]; if (g.res[h] < 0) continue; const pv = g.pip[h]; pip += pv; const r = g.res[h]; res[r] = 1; rp[r] = (rp[r] || 0) + pv; numCount[g.num[h]] = (numCount[g.num[h]] || 0) + 1; if (r === 4) po += pv; else if (r === 3) pw += pv; else if (r === 0) pwo += pv; else if (r === 1) pb += pv; else ps += pv; }
-  let nd = 0; for (const k in res) nd++;
-  let sameNum = 0; for (const n in numCount) if (numCount[n] >= 2) { const pv = _FS_PIP[+n] || 0; if (pv > sameNum) sameNum = pv; }
-  const pt = g.portOf[v]; const hasP3 = pt === 5 ? 1 : 0, hasPS = (pt >= 0 && pt < 5) ? 1 : 0;
-  const portMatch = (pt >= 0 && pt < 5 && rp[pt]) ? 1 : 0;
+  let pip = 0, po = 0, pw = 0, pwo = 0, pb = 0, ps = 0; const res = {}, numCount = {}, rp = {};
+  for (const h of _fsVHexes[v]) {
+    if (g.res[h] < 0) continue;
+    const pv = g.pip[h], r = g.res[h]; pip += pv; res[r] = 1; rp[r] = (rp[r] || 0) + pv;
+    numCount[g.num[h]] = (numCount[g.num[h]] || 0) + 1;
+    if (r === 4) po += pv; else if (r === 3) pw += pv; else if (r === 0) pwo += pv; else if (r === 1) pb += pv; else ps += pv;
+  }
+  const nd = Object.keys(res).length;
+  let sameNum = 0;
+  for (const n in numCount) if (numCount[n] >= 2) sameNum = Math.max(sameNum, _FS_PIP[+n] || 0);
+  const pt = g.portOf[v], hasP3 = pt === 5 ? 1 : 0, hasPS = pt >= 0 && pt < 5 ? 1 : 0;
+  const portMatch = pt >= 0 && pt < 5 && rp[pt] ? 1 : 0;
   const owned = {}; let ownedCnt = 0;
-  if (p && g.builds[p]) for (const bv of g.builds[p]) for (const h of _fsVHexes[bv]) { if (g.res[h] >= 0 && !owned[g.res[h]]) { owned[g.res[h]] = 1; ownedCnt++; } }
+  if (p && g.builds[p]) for (const bv of g.builds[p]) for (const h of _fsVHexes[bv]) {
+    if (g.res[h] >= 0 && !owned[g.res[h]]) { owned[g.res[h]] = 1; ownedCnt++; }
+  }
   let newRes = 0, newResPip = 0, dupPip = 0, newOW = 0;
-  for (const r in rp) { const rr = +r; if (owned[rr]) dupPip += rp[rr]; else { newRes++; newResPip += rp[rr]; if (rr === 3 || rr === 4) newOW += rp[rr]; } }
-  const isSecond = ownedCnt > 0 ? 1 : 0;
-  return [pip, po, pw, pwo, pb, ps, nd, hasP3, hasPS, portMatch, sameNum, newRes, newResPip, dupPip, newOW, isSecond];
+  for (const r in rp) {
+    const rr = +r;
+    if (owned[rr]) dupPip += rp[rr];
+    else { newRes++; newResPip += rp[rr]; if (rr === 3 || rr === 4) newOW += rp[rr]; }
+  }
+  return [pip, po, pw, pwo, pb, ps, nd, hasP3, hasPS, portMatch, sameNum,
+    newRes, newResPip, dupPip, newOW, ownedCnt > 0 ? 1 : 0];
 }
 function distillPickHTML(sp) {
   try {
-    const g = _fsFromHeavy();
-    let bv = -1, bs = -1e9;
-    for (let v = 0; v < _fsNV; v++) { if (!_fsLegal(g, v)) continue; const x = _fsFeatH(g, v, sp); let sc = _FS_DISTILL_W[0]; for (let k = 0; k < x.length; k++) sc += _FS_DISTILL_W[k + 1] * x[k];
-      if (HP1_PORT) { const pt = g.portOf[v];   // [HP1] 港シナジー加点
-        if (pt >= 0 && pt < 5 && sp && g.builds[sp]) { let surplus = 0;
-          for (const bvv of g.builds[sp]) for (const h of _fsVHexes[bvv]) { if (g.res[h] === pt) surplus += g.pip[h] * ((g.vCity && g.vCity[bvv]) ? 2 : 1); }
-          sc += HP1_PORT_W * surplus; } }
-      if (sc > bs) { bs = sc; bv = v; } }
-    if (bv < 0 || occupantOf(bv)) return null;
-    for (const n of (GEO.vertex_neighbors[String(bv)] || [])) if (occupantOf(n)) return null;
-    return bv;
+    const g = _fsFromHeavy(); let best = -1, bestScore = -Infinity;
+    for (let v = 0; v < _fsNV; v++) {
+      if (!_fsLegal(g, v)) continue;
+      const x = _fsFeatH(g, v, sp); let score = _FS_DISTILL_W[0];
+      for (let k = 0; k < x.length; k++) score += _FS_DISTILL_W[k + 1] * x[k];
+      if (HP1_PORT) {
+        const pt = g.portOf[v];
+        if (pt >= 0 && pt < 5 && sp && g.builds[sp]) {
+          let surplus = 0;
+          for (const built of g.builds[sp]) for (const h of _fsVHexes[built]) {
+            if (g.res[h] === pt) surplus += g.pip[h] * (g.vCity[built] ? 2 : 1);
+          }
+          score += HP1_PORT_W * surplus;
+        }
+      }
+      if (score > bestScore) { bestScore = score; best = v; }
+    }
+    if (best < 0 || occupantOf(best)) return null;
+    for (const n of (GEO.vertex_neighbors[String(best)] || [])) if (occupantOf(n)) return null;
+    return best;
   } catch (e) { return null; }
 }
-// ===== 挑戦者AI ここまで =====
+// ===== 配置蒸留器ここまで =====
 
 const PCOLORS = ["var(--p1)","var(--p2)","var(--p3)","var(--p4)","var(--p5)","var(--p6)"];
 const RES_LIST = ["wood","brick","sheep","wheat","ore","desert"];
@@ -149,9 +111,9 @@ const PORT_LIST = ["3:1","wood","brick","sheep","wheat","ore"];
 const PORT_LABEL = {"3:1":"3:1","wood":"木2:1","brick":"レンガ2:1","sheep":"羊2:1","wheat":"小麦2:1","ore":"鉱石2:1"};
 const PORT_MARK = {"3:1":"3:1","wood":"木","brick":"瓦","sheep":"羊","wheat":"麦","ore":"鉱"};
 const PORT_TYPES = ["3:1","3:1","3:1","3:1","wood","brick","sheep","wheat","ore"]; // 標準セット
-// 公式の港位置: 海岸線の辺を中心角度順に並べ、等間隔(3・4辺おき)に9箇所を固定配置。
-// 実物のCatanは港の場所(ドック)が盤に印刷済みで動かず、どの資源の港かだけがランダム。
-const OFFICIAL_PORT_EDGES=[4, 33, 52, 62, 71, 60, 47, 12, 9];
+// 公式2025年ルールブックの固定盤面に描かれた9つの入り江を、GEOの海岸辺へ対応付けたもの。
+// 上側左の港から時計回り。港の種類だけを可変盤ルールどおりシャッフルする。
+const OFFICIAL_PORT_EDGES=[34, 52, 68, 69, 60, 28, 13, 2, 18];
 function officialPorts(){
   ports={};
   const types=shuffle(PORT_TYPES.slice());
@@ -333,6 +295,15 @@ function glog(msg, player){
    ============================================================ */
 let EVAL_LOG = true;
 let _inPlayout = false;   // 探索プレイアウト中は評価ログを止める（内部の建設ごとにcomputeAdviceが走ると致命的に遅い）
+let _allowForcedWinInPlayout = false; // 終局まで回す勝率計測だけ、実戦と同じ確定10点手順を使う
+function _evalActorIsAI(p){
+  // 表示用computeAdviceは「単発候補の比較」。実戦AIはその上に確定10点探索、
+  // 複数交換・連続建設、賞レース等を重ねるため、AIが実際に採用した手を最終判断とする。
+  try{ if(typeof isAI==="function") return !!isAI(p); }catch(e){}
+  try{ if(typeof seatAI!=="undefined"&&seatAI&&seatAI[p]!=null) return seatAI[p]!=="human"; }catch(e){}
+  try{ return !!(game&&game.ai&&game.human!==p); }catch(e){}
+  return false;
+}
 function _evalTag(kind, targetId){
   if(!EVAL_LOG || _inPlayout) return "";
   try{
@@ -347,6 +318,7 @@ function _evalTag(kind, targetId){
       return false;
     };
     let idx = adv.findIndex(match);
+    const exactIdx=idx;
     // 同種の手を指したが位置が候補と違う場合は「同種の最上位」を代用して位置ズレを明示する
     let noted = "";
     if(idx<0){
@@ -360,9 +332,16 @@ function _evalTag(kind, targetId){
       idx = adv.findIndex(same);
       if(idx>=0) noted = "・AI推奨とは別の場所";
     }
-    if(idx<0) return "";
-    const me = adv[idx], top = adv[0];
+    const top = adv[0];
     const fmt = x => (x<=-40 ? "対象外" : (x>=0?"+":"")+(Math.round(x*10)/10));
+    // AI自身の行動では、実際に全ルールを通して選ばれた手が権威ある「おすすめ」。
+    // computeAdviceの順位でそれを誤り扱いせず、完全一致した単発候補点だけ参考表示する。
+    if(_evalActorIsAI(cur())){
+      const ref=exactIdx>=0?`・単発候補評価 ${fmt(adv[exactIdx].score)}`:"";
+      return `〔AI最終判断・おすすめ${ref}〕`;
+    }
+    if(idx<0) return "";
+    const me = adv[idx];
     const sc = fmt(me.score);
     const topShort = String(top.label).replace(/（.*$/,"").trim();
     return (idx===0)
@@ -899,11 +878,13 @@ function _tradeBank(p,give,get){ // DOM無しの銀行/港交易
 // 交換を駆使すればcostObjを今すぐ払えるか（手札を壊さずシミュレート）
 function _canCompleteByTrade(p, costObj){
   const hand=Object.assign({},game.hands[p]);
+  const bank=Object.fromEntries(RES5.map(r=>[r,Math.max(0,bankOf(r))]));
   let guard=0;
   while(guard++<12){
     let need=null;
     for(const [r,n] of Object.entries(costObj)){ if((hand[r]||0)<n){ need=r; break; } }
     if(!need) return true;
+    if((bank[need]||0)<=0) return false;
     let best=null;
     for(const r of RES5){
       const reserve=costObj[r]||0;
@@ -911,7 +892,9 @@ function _canCompleteByTrade(p, costObj){
       if(spare>=rateFor(p,r)){ if(!best||rateFor(p,r)<rateFor(p,best)) best=r; }
     }
     if(!best) return false;
-    hand[best]-=rateFor(p,best); hand[need]=(hand[need]||0)+1;
+    const rate=rateFor(p,best);
+    hand[best]-=rate; bank[best]+=rate;
+    hand[need]=(hand[need]||0)+1; bank[need]--;
   }
   return false;
 }
@@ -922,6 +905,10 @@ let PRIZE_THREAT_SEATS=null;       // 最大脅威の賞保持者だけを防衛
 let PRIZE_EXACT_SEATS=null;        // 実際に賞を移せる辺だけを使う席
 let PRIZE_THREAT_MIN_VP_CFG=null;  // 席別の公開VP発火点
 let PRIZE_TRADE_DEV_SEATS=null;    // 賞レース時の交換→発展を通常候補へ足す席
+// 各行動後に上位の10点経路を再計算し、道賞・騎士賞だけ相手との競争込みで評価する。
+// app.js が最強AI/無敵AIの手番席だけ設定する。nullなら従来挙動。
+let DYNAMIC_ROUTE_CFG=null;
+const DYNAMIC_ROUTE_CACHE=new WeakMap(); // game JSONやオンライン同期へ混ぜない
 let PROTECT_CITY_RESERVE=false;   // 実験済み: 全10盤面で悪化(48.0%)のため不採用
 let DEV_BUY_THRESH=5;   // カード購入(あふれ防止)を発動する手札枚数の閾値
 let SETTLE_FLOOR=2;   // 家を2軒維持（A/B検証済み: 20盤面で約52.65%・ダイスも81-84に短縮）
@@ -1137,6 +1124,7 @@ function _botDiscard(){ // 捨て: 次の建設の予約分を守り、余剰か
 }
 /* ===== [2026-08-18] ユーザー指定ルール: 道賞の確定取り／手札圧縮の作り直し ===== */
 let ROAD_WIN=false, ROAD_WIN_SEATS=null;
+let ROAD_NEAR_WIN=true; // 道賞で8/9点になるだけの手を強制する旧ルール（最強AIではOFF）
 let FORCED_WIN_SEATS=null;   // コメント由来の一般確定10点探索（席別・可逆）
 let CITY_HOLD_ROLLS=4;
 let TURN_CFG=null;
@@ -1164,7 +1152,9 @@ function _pCityByNextTurn(p){
         if(b.resource==="wheat") gain[b.number].w+=mult; else gain[b.number].o+=mult;
       }
     }
-    const W=[[2,1],[3,2],[4,3],[5,4],[6,5],[7,0],[8,5],[9,4],[10,3],[11,2],[12,1]];   // 7は産出なし
+    // 7も「資源が増えない遷移」として6/36を残す。0にすると各投ごとに確率質量が
+    // 30/36へ減り、4投以内の都市到達率を大幅に過小評価してしまう。
+    const W=[[2,1],[3,2],[4,3],[5,4],[6,5],[7,6],[8,5],[9,4],[10,3],[11,2],[12,1]];
     // 状態: [残り必要麦][残り必要鉄] の確率
     let cur=[]; for(let a=0;a<=needW;a++){ cur.push(new Array(needO+1).fill(0)); }
     cur[needW][needO]=1;
@@ -1490,7 +1480,7 @@ function _fwCouldReachByBuildings(p,bonusVP,allowResourceCard){
   return Math.floor(cards/4)>=gap;
 }
 function _forcedWinRule(p){
-  if(_inPlayout || game.phase!=="main") return false;
+  if((_inPlayout&&!_allowForcedWinInPlayout) || game.phase!=="main") return false;
   if(!(ROAD_WIN_SEATS ? ROAD_WIN_SEATS.has(p) : ROAD_WIN)) return false;
   // 道賞を含む既存の完全探索を最初に使う。
   if(_roadWinRule(p)) return true;
@@ -1557,7 +1547,7 @@ function _rwP2VPNextTurn(p){
   return tot? ok/tot : 0;
 }
 function _roadWinRule(p){
-  if(_inPlayout) return false;   // 探索プレイアウト内では走らせない（道の組合せ探索＋最長路DFSが重すぎる）
+  if(_inPlayout&&!_allowForcedWinInPlayout) return false; // 通常探索は軽量化、終局プレイアウトは実戦方策を再現
   if(!(ROAD_WIN_SEATS ? ROAD_WIN_SEATS.has(p) : ROAD_WIN)) return false;
   if(placements[p].roads.size>=15) return false;
   if(game.lr.holder===p) return false;                 // 既に保持
@@ -1585,7 +1575,7 @@ function _roadWinRule(p){
   }
   const vpAfter = vpOf(p) + 2;
   let go=!!winning;
-  if(!go && (vpAfter===8 || vpAfter===9)){              // 8点/9点なら条件つきで必ず
+  if(!go && ROAD_NEAR_WIN && (vpAfter===8 || vpAfter===9)){ // 8/9点の強制は実測で都市を潰したため可逆化
     if(!_rwOppCanExceed(p, plan.len) && _rwP2VPNextTurn(p)>=0.25) go=true;
   }
   if(!go) return false;
@@ -1799,14 +1789,14 @@ function _wmFullPlayToEnd(){
 function winFullPlayoutSample(base,seed){
   if(!base)return 0;
   const saved={render,updateGamePanel,toast,glog,_recAct,snapshotTurn,random:Math.random,
-    inPlayout:_inPlayout,seatAI:(typeof seatAI!=="undefined"?seatAI:null)};
-  const flags={ETA_W,ETA_SEATS,SCARCE_W,SCARCE_SEATS,LOOK_W,LOOK_SEATS,ROAD_WIN_SEATS,FORCED_WIN_SEATS,TURN_CFG,ROLLOUT_SEATS,
+    inPlayout:_inPlayout,allowForcedWin:_allowForcedWinInPlayout,seatAI:(typeof seatAI!=="undefined"?seatAI:null)};
+  const flags={ETA_W,ETA_SEATS,SCARCE_W,SCARCE_SEATS,LOOK_W,LOOK_SEATS,ROAD_WIN_SEATS,ROAD_NEAR_WIN,FORCED_WIN_SEATS,DYNAMIC_ROUTE_CFG,TURN_CFG,ROLLOUT_SEATS,
     ROAD_PATH_SEATS,ROAD_PORT_W,PRIZE_THREAT_SEATS,PRIZE_EXACT_SEATS,PRIZE_THREAT_MIN_VP_CFG,PRIZE_TRADE_DEV_SEATS,
     ROBBER_RP_ARMY,PORT_SYNERGY,HP1_PORT,ROBBER_DELAY,HUMAN_SETUP};
   let winner=0;
   try{
     render=()=>{};updateGamePanel=()=>{};toast=()=>{};glog=()=>{};_recAct=()=>{};snapshotTurn=()=>{};
-    Math.random=_wmSeededRandom(seed);_inPlayout=true;restoreState(base.snapshot);
+    Math.random=_wmSeededRandom(seed);_inPlayout=true;_allowForcedWinInPlayout=true;restoreState(base.snapshot);
     if(typeof seatAI!=="undefined")seatAI={1:"strong",2:"strong",3:"strong",4:"strong"};
     if(game&&game.dev&&Array.isArray(game.dev.deck)){
       const d=game.dev.deck;for(let i=d.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[d[i],d[j]]=[d[j],d[i]];}
@@ -1814,9 +1804,9 @@ function winFullPlayoutSample(base,seed){
     winner=_wmFullPlayToEnd();
   }finally{
     restoreState(base.snapshot);render=saved.render;updateGamePanel=saved.updateGamePanel;toast=saved.toast;glog=saved.glog;_recAct=saved._recAct;snapshotTurn=saved.snapshotTurn;
-    Math.random=saved.random;_inPlayout=saved.inPlayout;if(saved.seatAI)seatAI=saved.seatAI;
+    Math.random=saved.random;_inPlayout=saved.inPlayout;_allowForcedWinInPlayout=saved.allowForcedWin;if(saved.seatAI)seatAI=saved.seatAI;
     ETA_W=flags.ETA_W;ETA_SEATS=flags.ETA_SEATS;SCARCE_W=flags.SCARCE_W;SCARCE_SEATS=flags.SCARCE_SEATS;LOOK_W=flags.LOOK_W;LOOK_SEATS=flags.LOOK_SEATS;
-    ROAD_WIN_SEATS=flags.ROAD_WIN_SEATS;FORCED_WIN_SEATS=flags.FORCED_WIN_SEATS;TURN_CFG=flags.TURN_CFG;ROLLOUT_SEATS=flags.ROLLOUT_SEATS;ROAD_PATH_SEATS=flags.ROAD_PATH_SEATS;ROAD_PORT_W=flags.ROAD_PORT_W;
+    ROAD_WIN_SEATS=flags.ROAD_WIN_SEATS;ROAD_NEAR_WIN=flags.ROAD_NEAR_WIN;FORCED_WIN_SEATS=flags.FORCED_WIN_SEATS;DYNAMIC_ROUTE_CFG=flags.DYNAMIC_ROUTE_CFG;TURN_CFG=flags.TURN_CFG;ROLLOUT_SEATS=flags.ROLLOUT_SEATS;ROAD_PATH_SEATS=flags.ROAD_PATH_SEATS;ROAD_PORT_W=flags.ROAD_PORT_W;
     PRIZE_THREAT_SEATS=flags.PRIZE_THREAT_SEATS;PRIZE_EXACT_SEATS=flags.PRIZE_EXACT_SEATS;PRIZE_THREAT_MIN_VP_CFG=flags.PRIZE_THREAT_MIN_VP_CFG;PRIZE_TRADE_DEV_SEATS=flags.PRIZE_TRADE_DEV_SEATS;
     ROBBER_RP_ARMY=flags.ROBBER_RP_ARMY;PORT_SYNERGY=flags.PORT_SYNERGY;HP1_PORT=flags.HP1_PORT;ROBBER_DELAY=flags.ROBBER_DELAY;HUMAN_SETUP=flags.HUMAN_SETUP;
   }
@@ -2080,10 +2070,14 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
         const ow=(best==="ore"||best==="wheat");
         if((ow && raw>=3) || raw>=4){ playDev("mono"); resolveMono(best); }
       }
-      // 建設用の道カード（道賞狙い or 建材が足りず道を出したい時）
+      // 最強AIは、街道建設を「木土不足だから」ではなく、現在の10点ルートが
+      // 道賞または家への接続を支持する時だけ使う。通常AIは従来挙動を維持。
       const _lrNeed=(game.lr.holder&&game.lr.holder!==p)?game.lr.len+1:5;
       const _lrClose = game.lr.holder!==p && longestRoadOf(p)>=_lrNeed-2;   // 道賞まであと2本以内
-      if(!game.devPlayed && canPlay("roads") && (game.hands[p].wood+game.hands[p].brick<2 || (vpOf(p)>=8&&_lrClose))){ playDev("roads"); }
+      if(!game.devPlayed && canPlay("roads")){
+        const dr=_dynamicRoadCardIntent(p);
+        if(dr?dr.use:(game.hands[p].wood+game.hands[p].brick<2||(vpOf(p)>=8&&_lrClose)))playDev("roads");
+      }
     }
     const adv=computeAdvice();
     // ===== ワンチャン狙いv3: 明確な最下位なら、カード購入を積極化（VPカードで一発逆転狙い） =====
@@ -2208,7 +2202,7 @@ function _botMain(p){ // 建設フェーズ: 提案リストに従って行動�
       const noUpgrade = placements[p].settlements.size===0 || placements[p].cities.size>=4;
       if(noUpgrade && vpOf(p)<10 && placements[p].settlements.size<5){
         // 建てられる頂点があるか（道の接続先）
-        const B2=computeBest();
+        const B2=computeBest(undefined, p);
         let target=null;
         for(const vidS in B2.scores){ const vid=Number(vidS);
           if(GEO.edges.some(e=>(e.a===vid||e.b===vid)&&placements[p].roads.has(e.id))){ 
@@ -2327,311 +2321,16 @@ function _cleanupTurn(p){ // カードの置き残し・選択残しを処理し
     } else resolveMono("ore");
   }
 }
-function _snapshotPlacements(){
-  const out={};
-  for(let p=1;p<=numPlayers;p++) out[String(p)]={
-    settlements:[...placements[p].settlements].sort((a,b)=>a-b),
-    roads:[...placements[p].roads].sort((a,b)=>a-b)};
-  return out;
-}
-
 // ===================== AIと対戦（選んだ席順があなた、残りがAI） =====================
 let aiBusy=false;
 let AI_SPEED=1;   // AIの1手あたりの待ち時間の倍率（0=待ちなし）
-function aiDelay(ms){
-  const el=(typeof document!=="undefined"&&document.getElementById)?document.getElementById("aiSpeed"):null;
-  const sp=el&&el.value!==undefined&&el.value!=="" ? Number(el.value) : AI_SPEED;
-  return Math.max(0, Math.round(ms*(isNaN(sp)?1:sp)));
-}
 function isAI(p){ return game && game.ai && game.ai.has(p); }
 // 1アクションだけ進めて、画面を更新し、必要なら少し待って次へ。人間の番になったら止まる。
-function aiStep(){
-  if(!game || !game.ai){ aiBusy=false; return; }
-  if(game.phase==="over"){ aiBusy=false; render(); updateGamePanel(); return; }
-
-  // --- 初期配置フェーズ ---
-  if(game.phase==="setup"){
-    const sp=game.setup.queue[game.setup.step];
-    if(!isAI(sp)){ aiBusy=false; render(); updateGamePanel(); return; }   // 人間の番
-    if(game.setup.phase==="settle"){
-      if(AI_MODE==="challenger" && typeof fastMctsPickHTML==="function"){
-        const st=document.getElementById("gameStatus");
-        if(st) st.innerHTML=`<b style="color:${PCOLORS[sp-1]}">P${sp}</b> が高速先読み中…（挑戦者AI）`;
-        setTimeout(()=>{
-          const v=(typeof distillPickHTML==="function")?distillPickHTML(sp):fastMctsPickHTML(sp);
-          gameClickVertex((v!=null && !occupantOf(v)) ? v : computeBest().ranked[0]);
-          render(); updateGamePanel();
-          setTimeout(aiStep, aiDelay(300));
-        }, 20);
-        return;
-      }
-      if(AI_MODE==="mcts" || AI_MODE==="learned"){
-        // MCTS AI / 学習AI(MCTS+学習モデル): 非同期でプレイアウト（ブラウザを固めない）。進捗をステータスに表示。
-        const st=document.getElementById("gameStatus");
-        const label=AI_MODE==="learned"?"MCTS+学習モデル":"MCTS";
-        if(st) st.innerHTML=`<b style="color:${PCOLORS[sp-1]}">P${sp}</b> が先読み中…（${label}）`;
-        mctsPlacementAsync(6, 8, (done,total)=>{
-          if(st) st.innerHTML=`<b style="color:${PCOLORS[sp-1]}">P${sp}</b> が先読み中… ${done}/${total}`;
-        }).then(stats=>{
-          let bestId=stats[0].vid;
-          if(AI_MODE==="learned" && typeof vertexModelScore==="function"){
-            // MCTSのプレイアウト勝率(ノイズあり)と学習モデルの静的勝率を平均して再ランキング
-            // →6プレイアウトだけの分散を、独立推定である学習モデルの予測でならす
-            const blended=stats.map(s=>({vid:s.vid, sc:(s.wins/s.games)*0.5 + vertexModelScore(s.vid,sp)*0.5}));
-            blended.sort((a,b)=>b.sc-a.sc);
-            bestId=blended[0].vid;
-          }
-          gameClickVertex(bestId);
-          render(); updateGamePanel();
-          setTimeout(aiStep, aiDelay(400));
-        }).catch(()=>{ setTimeout(aiStep, aiDelay(150)); });   // 他のMCTSと衝突(busy)→少し待って再試行
-        return;   // 非同期完了後に続きを進める
-      }else{
-        // 統一AI（学習単体）: computeBestが既に静的25%+モデル75%を返すので、補完だけ足して即決
-        const B=computeBest();
-        let cands=B.ranked.slice(0,COMPLEMENT_SLICE||10).map(v=>({id:v,score:B.scores[v].score+_complementBonus(sp,v)*COMPLEMENT_MULT+(((ORE_STACK instanceof Set)?ORE_STACK.has(sp):!!ORE_STACK)?_oreStackBonus(sp,v)*ORE_STACK_SETTLE:0)}));
-        _tierSort(cands, sp);
-        const pick=_wPick(cands, 1.2) || {id:B.ranked[0]};
-        gameClickVertex(pick.id);
-      }
-    }else{
-      const _oc=occupantOf(game.setup.lastSettle);
-      const _wantPort = _oc && placements[_oc.p] && placements[_oc.p].settlements.size===2;   // 2軒目の直後の道→港狙い（タダ）
-      const rr=bestRoadFrom(game.setup.lastSettle, _wantPort, _oc&&_oc.p);
-      if(rr.length) gameClickEdge(rr[0].eid);
-      else { const v=game.setup.lastSettle; const e=GEO.edges.find(e=>(e.a===v||e.b===v)&&!ownerOf("roads",e.id)); if(e) gameClickEdge(e.id); }
-    }
-    render(); updateGamePanel();
-    setTimeout(aiStep, aiDelay(550));
-    return;
-  }
-
-  // --- バースト(誰でも): AIの分だけ自動で捨てる。人間が含まれるなら止めて手動に ---
-  if(game.phase==="discard"){
-    const d=game.discardQueue[0];
-    if(isAI(d.p)){ _botDiscard(); render(); updateGamePanel(); setTimeout(aiStep, aiDelay(400)); return; }
-    aiBusy=false; render(); updateGamePanel(); return;   // 人間が捨てる番
-  }
-
-  const p=cur();
-  if(!isAI(p)){ aiBusy=false; render(); updateGamePanel(); return; }   // 人間の手番
-
-  // --- AIの手番 ---
-  if(game.phase==="roll"){
-    if(_shouldPlayKnight(p)) playDev("knight");
-    if(game.phase==="roll") doRoll(null);
-    render(); updateGamePanel(); setTimeout(aiStep, aiDelay(650)); return;
-  }
-  if(game.phase==="robber"){
-    const ra=robberAdvice();
-    const hid = ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id;
-    gameClickHex(hid);
-    render(); updateGamePanel(); setTimeout(aiStep, aiDelay(550)); return;
-  }
-  if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); render(); updateGamePanel(); setTimeout(aiStep, aiDelay(450)); return; }
-  if(game.phase==="main"){
-    _botMain(p); _cleanupTurn(p);
-    if(game.phase==="main") endTurnGame();
-    render(); updateGamePanel(); setTimeout(aiStep, aiDelay(650)); return;
-  }
-  aiBusy=false;
-}
-// 人間の操作後に呼ぶ: いまAIの番なら自動進行を起動
-function aiMaybeGo(){
-  if(!game || !game.ai || aiBusy) return;
-  const needAI =
-    (game.phase==="setup" && isAI(game.setup.queue[game.setup.step])) ||
-    (game.phase==="discard" && isAI(game.discardQueue[0].p)) ||
-    (["roll","robber","steal","main"].includes(game.phase) && isAI(cur()));
-  if(needAI){ aiBusy=true; setTimeout(aiStep, aiDelay(500)); }
-}
-let AI_MODE="puremodel";   // "puremodel"(統一AI・標準) or "learned"(MCTS・重い)
-function startVsAI(){
-  const empty=GEO.hexes.some(hh=>!board[hh.id].resource);
-  if(empty){ toast("先に盤面（タイルと数字）を用意してください"); return; }
-  AI_MODE=document.getElementById("aiType").value;
-  const mySeat=Number(document.getElementById("mySeat").value)||1;
-  document.getElementById("gamePlayers").value="4";
-  // 対局中は最善手アドバイスのMCTSを止める（AI自身のMCTSと競合し盤面が壊れるバグの対策）
-  showBest=false; mctsAdv={key:null, stats:null, computing:false};
-  startGame(null);
-  game.ai=new Set([1,2,3,4].filter(p=>p!==mySeat));   // mySeat=人間、残りAI
-  const _aiLabel={learned:"学習AI(MCTS+学習モデル)", puremodel:"学習単体AI(統一)", challenger:"挑戦者AI(高速MCTS)"}[AI_MODE]||AI_MODE;
-  toast(`AI3人と対戦開始！ あなたはP${mySeat}です（相手: ${_aiLabel}）`);
-  render(); updateGamePanel();
-  aiMaybeGo();
-}
-
-// 1試合を回す。temp=初期配置の貪欲さ（大きいほどバラつく）
-function playSelfGame(temp, skipBoardGen, fixedInit){
-  if(!skipBoardGen){ randomBoard(); randomPorts(); }
-  document.getElementById("gamePlayers").value="4";
-  startGame(null);
-  // プレイヤーごとに配置の上手さを変える(温度: 低い=貪欲/上手い, 高い=ランダム/下手)
-  // → 配置の質にバラつきが生まれ、「良い配置は勝つのか」の信号がデータに乗る
-  // ※UNIFORM_TEMPを設定すると全席同じ腕前になる（実対戦の試合長を測る用）
-  const temps={};
-  const pool = (typeof UNIFORM_TEMP!=="undefined" && UNIFORM_TEMP)
-    ? [UNIFORM_TEMP,UNIFORM_TEMP,UNIFORM_TEMP,UNIFORM_TEMP]
-    : [0.5, 1.5, 4, 12];
-  const order=[1,2,3,4].sort(()=>Math.random()-0.5);
-  order.forEach((p,i)=>temps[p]=pool[i]);
-  // --- 初期配置 ---
-  let guard=0;
-  while(game.phase==="setup" && guard++<40){
-    if(game.setup.phase==="settle"){
-      const sp=game.setup.queue[game.setup.step];
-      // 実データ再現: 指定席の初期2軒を強制する（残り席は通常どおりAIが選ぶ）
-      if(fixedInit && fixedInit[sp] && fixedInit[sp].length){
-        const forced=fixedInit[sp].shift();
-        if(forced!=null && !occupantOf(forced)){ gameClickVertex(forced); continue; }
-      }
-      const B=computeBest();   // 統一AI: 静的25%+モデル75%（computeBest内で完結）
-      let cands=B.ranked.slice(0,COMPLEMENT_SLICE||16).map(v=>({id:v,score:B.scores[v].score+_complementBonus(sp,v)*COMPLEMENT_MULT+(((ORE_STACK instanceof Set)?ORE_STACK.has(sp):!!ORE_STACK)?_oreStackBonus(sp,v)*ORE_STACK_SETTLE:0)}));
-      // ペア読み: 1軒目なら「2軒セットの見込み合計」で選び直す
-      const _pp=(PAIR_PLACE instanceof Set)?PAIR_PLACE.has(sp):!!PAIR_PLACE;
-      if(_pp && placements[sp].settlements.size===0){
-        _pairBase=B;
-        cands=B.ranked.slice(0, PAIR_WIDTH).map(v=>({id:v, score:_pairScore(sp, v)}));
-        _pairBase=null;
-      }
-      _tierSort(cands, sp);
-      const pick=_wPick(cands, temps[sp]);
-      gameClickVertex(pick.id);
-    }else{
-      const _oc2=occupantOf(game.setup.lastSettle);
-      const _wantPort = _oc2 && placements[_oc2.p] && placements[_oc2.p].settlements.size===2;
-      const rr=bestRoadFrom(game.setup.lastSettle, _wantPort, _oc2&&_oc2.p);
-      const pick = (Math.random()<0.85&&rr.length) ? rr[0] : rr[Math.floor(Math.random()*rr.length)];
-      if(!pick){ // 置ける道が無い（理論上ほぼ無い）→ 任意の隣接辺
-        const v=game.setup.lastSettle;
-        const e=GEO.edges.find(e=>(e.a===v||e.b===v)&&!ownerOf("roads",e.id));
-        gameClickEdge(e.id);
-      } else gameClickEdge(pick.eid);
-    }
-  }
-  const initPlacements=_snapshotPlacements();  // 学習対象=この初期配置
-  // --- 本編 ---
-  let rolls=0, iters=0;
-  while(game.phase!=="over" && rolls<400){
-    const p=cur();
-    if(game.phase==="roll"){
-      // 盗賊が自分の産出を止めていれば騎士（SMART_ROBBER時は賞取り優先の新ロジック）
-      if(_shouldPlayKnight(p)) playDev("knight");
-      if(game.phase==="roll"){ doRoll(null); rolls++; }
-    }
-    if(game.phase==="discard"){ while(game.discardQueue.length) _botDiscard(); }
-    if(game.phase==="robber"){ const ra=robberAdvice();
-      let hid = ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id;
-      gameClickHex(hid); }
-    if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); }
-    if(game.phase==="main"){ _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); }
-    if(game.phase==="over") break;
-    if(++iters>3000) break;   // 安全弁
-  }
-  // 勝者（上限到達なら最高VP）
-  let winner=null,bv=-1;
-  for(let p=1;p<=numPlayers;p++){ const v=vpOf(p); if(v>bv){bv=v;winner=p;} }
-  // 各プレイヤーの最終内訳（どうやって点を取ったか）
-  const players={};
-  for(let p=1;p<=numPlayers;p++){
-    players[String(p)]={
-      vp: vpOf(p),
-      settlements: placements[p].settlements.size,          // 開拓地(×1点)
-      cities: placements[p].cities.size,                    // 都市(×2点)
-      longestRoad: game.lr.holder===p,                      // 最長交易路(+2)
-      largestArmy: game.la.holder===p,                      // 最大騎士力(+2)
-      vpCards: game.dev.hands[p].vp,                        // 勝利点カード(×1点)
-      knightsPlayed: game.army[p],                          // 使った騎士の枚数
-      devInHand: Object.values(game.dev.hands[p]).reduce((a,b)=>a+b,0)  // 手元の発展カード枚数
-    };
-  }
-  const rec={source:"selfplay", temps,
-    board:{hexes:GEO.hexes.map(h=>({id:h.id, resource:board[h.id].resource, number:board[h.id].number}))},
-    ports:Object.entries(ports).map(([e,t])=>({edge:Number(e),type:t})),
-    placements:initPlacements, winner, label:winner, vp:bv, rolls,
-    players, lrHolder:game.lr.holder, laHolder:game.la.holder, devDeckLeft:game.dev.deck.length};
-  endGameMode();
-  return rec;
-}
 // 一括自己対戦では逆算(重い)をオフにして高速化。対戦・最善手表示ではオン。
 let USE_BACKSOLVE=true;
 
-// AI同士の1試合を「棋譜つき」で回し、リプレイビューアに読み込ませて観戦する。
-// playSelfGameと違い、snapshotTurnで各ターンの盤面を記録する。
-function watchAIGame(){
-  endSim(); exitReplay();
-  const prevBS=USE_BACKSOLVE; USE_BACKSOLVE=true;   // 観戦用は賢く打たせる
-  randomBoard(); randomPorts();
-  document.getElementById("gamePlayers").value="4";
-  startGame(null);
-  // 初期配置（4体とも最善寄りで置く）
-  let guard=0;
-  while(game.phase==="setup" && guard++<40){
-    if(game.setup.phase==="settle"){
-      const sp=game.setup.queue[game.setup.step];
-      const B=computeBest();   // 統一AI: 静的25%+モデル75%（本番playSelfGameと同じロジックに統一）
-      let cands=B.ranked.slice(0,COMPLEMENT_SLICE||10).map(v=>({id:v,score:B.scores[v].score+_complementBonus(sp,v)*COMPLEMENT_MULT+(((ORE_STACK instanceof Set)?ORE_STACK.has(sp):!!ORE_STACK)?_oreStackBonus(sp,v)*ORE_STACK_SETTLE:0)}));
-      _tierSort(cands, sp);
-      const pick=_wPick(cands, 1.2) || {id:B.ranked[0]};
-      gameClickVertex(pick.id);
-    }else{
-      const _oc3=occupantOf(game.setup.lastSettle);
-      const _wantPort2 = _oc3 && placements[_oc3.p] && placements[_oc3.p].settlements.size===2;
-      const rr=bestRoadFrom(game.setup.lastSettle, _wantPort2, _oc3&&_oc3.p);
-      if(rr.length) gameClickEdge(rr[0].eid);
-      else { const v=game.setup.lastSettle; const e=GEO.edges.find(e=>(e.a===v||e.b===v)&&!ownerOf("roads",e.id)); gameClickEdge(e.id); }
-    }
-  }
-  // 本編（snapshotTurnは各ターン終了時にendTurnGame内で呼ばれる）
-  let rolls=0, iters=0;
-  while(game.phase!=="over" && rolls<400){
-    const p=cur();
-    if(game.phase==="roll"){
-      if(_shouldPlayKnight(p)) playDev("knight");
-      if(game.phase==="roll"){ doRoll(null); rolls++; }
-    }
-    if(game.phase==="discard"){ while(game.discardQueue.length) _botDiscard(); }
-    if(game.phase==="robber"){ const ra=robberAdvice(); gameClickHex(ra?ra.hid:GEO.hexes.find(h=>h.id!==game.robber).id); }
-    if(game.phase==="steal"){ stealFrom(bestStealTarget(game.stealCands)); }
-    if(game.phase==="main"){ _botMain(p); _cleanupTurn(p); if(game.phase==="main") endTurnGame(); }
-    if(game.phase==="over") break;
-    if(++iters>3000) break;
-  }
-  USE_BACKSOLVE=prevBS;
-  let winner=1,bv=-1; for(let p=1;p<=numPlayers;p++){ const v=vpOf(p); if(v>bv){bv=v;winner=p;} }
-  const turns=game.turns.slice();   // 記録した棋譜
-  const rec={
-    board:{ hexes: GEO.hexes.map(h=>({id:h.id,q:h.q,r:h.r,resource:board[h.id].resource,number:board[h.id].number})) },
-    ports: Object.entries(ports).map(([e,t])=>({edge:Number(e),type:t})),
-    replay: turns,
-    winner, label:winner, source:"aiwatch", log:game.log.slice(),
-    vp:bv, rolls
-  };
-  endGameMode();
-  return rec;
-}
 // 残りダイス期待値モード（この手を打つと残り試合でどれだけ資源が増えるかで評価）
 let USE_EV=false;
-// n試合回してJSONL文字列を返す（ブラウザではUIを固めないよう分割実行）。中断可。
-let selfplayStop=false;
-function runSelfplay(n, onProgress, temp){
-  const lines=[];
-  selfplayStop=false;
-  const prevBS=USE_BACKSOLVE; USE_BACKSOLVE=false;   // 大量生成は軽い旧ロジックで
-  return new Promise(resolve=>{
-    let i=0;
-    function batch(){
-      const t0=Date.now();
-      while(i<n && !selfplayStop && Date.now()-t0<120){ lines.push(JSON.stringify(playSelfGame(temp||2))); i++; }
-      if(onProgress) onProgress(i,n);
-      if(i<n && !selfplayStop) setTimeout(batch,0);
-      else { USE_BACKSOLVE=prevBS; resolve(lines.join("\n")+(lines.length?"\n":"")); }
-    }
-    batch();
-  });
-}
-
 // --- パネル描画 ---
 function updateGamePanel(){
   if(!game) return;
@@ -2802,18 +2501,6 @@ function randomBoard(){
   if(last) board=last;              // 万一見つからなくても螺旋数字の盤面を返す（描画は壊れない）
 }
 // 数字の螺旋を無視して完全ランダムに数字だけ振る旧方式（必要時のフォールバック用に残す）
-function randomBoardShuffled(){
-  const resPool=[]; for(const [k,n] of Object.entries(RES_COUNTS)) for(let i=0;i<n;i++) resPool.push(k);
-  for(let outer=0; outer<200; outer++){
-    const res=shuffle(resPool.slice()); board={};
-    GEO.hexes.forEach((h,i)=>{ board[h.id]={resource:res[i], number:null}; });
-    const numbered=GEO.hexes.filter(h=>board[h.id].resource!=="desert").map(h=>h.id);
-    for(let attempt=0; attempt<200; attempt++){ const nums=shuffle(TOKENS.slice());
-      numbered.forEach((hid,i)=>{ board[hid].number=nums[i]; });
-      if(numbersLegal()) return; }
-  }
-}
-
 // 公式の螺旋順（島の角から中央へ反時計回り）。geometry座標から算出済みの固定順。
 const SPIRAL_ORDER=[7,3,0,1,2,6,11,15,18,17,16,12,8,4,5,10,14,13,9];
 // 標準の数値トークン列 A〜R（アルファベット順）: A5 B2 C6 D3 E8 F10 G9 H12 I11 J4 K8 L10 M9 N4 O5 P6 Q3 R11
@@ -2827,15 +2514,6 @@ function assignOfficialNumbers(){
     b.number=OFFICIAL_TOKENS[i++];
   }
 }
-// 公式配置の盤面を作る: 資源はランダム、数字は螺旋で公式どおり
-function officialBoard(){
-  const resPool=[]; for(const [k,n] of Object.entries(RES_COUNTS)) for(let i=0;i<n;i++) resPool.push(k);
-  const res=shuffle(resPool.slice());
-  board={};
-  GEO.hexes.forEach((h,i)=>{ board[h.id]={resource:res[i], number:null}; });
-  assignOfficialNumbers();
-}
-
 // --- 座標フィッティング --------------------------------------------------
 let TF; // {s, ox, oy}
 function computeTransform(target=560, pad=26){
@@ -2893,12 +2571,6 @@ function triggerMCTSAdvice(){
   }).catch(()=>{ mctsAdv.computing=false; });
 }
 const WINMODEL={"feature_names": ["total_pip", "max_vertex_pip", "avg_pip", "num_distinct_resources", "num_distinct_numbers", "has_wood", "has_brick", "has_sheep", "has_wheat", "has_ore", "ore_wheat_combo", "has_port", "has_generic_port", "has_specific_port", "port_match", "center_dist", "complement_score", "backup_count", "seat_1", "seat_2", "seat_3", "seat_4"], "mean": [9.44995138888889, 9.44995138888889, 9.44995138888889, 2.3649055555555556, 2.6951180555555556, 0.4622486111111111, 0.37299166666666667, 0.43485694444444445, 0.5866458333333333, 0.5081625, 0.22975277777777778, 0.1770611111111111, 0.05672638888888889, 0.12033472222222222, 0.07365833333333334, 2.4944942186367896, 6.061309722222222, 5.3572625, 0.25, 0.25, 0.25, 0.25], "scale": [2.0876816282518518, 2.0876816282518518, 2.0876816282518518, 0.6194931099710457, 0.5304464052460831, 0.4985727957235201, 0.48359992066181307, 0.49573821954022773, 0.4924352744941555, 0.4999333691522522, 0.42067379153352824, 0.38172041345012936, 0.23131905605246644, 0.32535254240753725, 0.2612140564072232, 0.8902674667441031, 3.2254794227947543, 1.948765536745848, 0.4330127018922193, 0.4330127018922193, 0.4330127018922193, 0.4330127018922193], "coef": [0.1253184302583397, 0.1253184302583397, 0.1253184302583397, 0.14197922454711084, 0.06816859985151112, -0.05003870810091614, 0.009488436342892276, -0.031702803876320004, 0.18235980763099577, 0.06846986944341572, -0.012616043937698017, 0.07628140235250673, 0.0790146166691954, 0.03331949343966854, 0.11600900511353276, -0.048623374177995816, 0.2444561639242638, -0.0246301901977465, -0.07091560654325528, -0.023385840810877963, 0.019405035572971574, 0.07489641178130485], "intercept": -1.1860113315951561, "trained_on": "selfplay-100000games-enriched-features", "n_games": 100000, "auc": 0.6509283545833334};
-const GBM_MODEL={"feature_names": ["total_pip", "max_vertex_pip", "avg_pip", "num_distinct_resources", "num_distinct_numbers", "has_wood", "has_brick", "has_sheep", "has_wheat", "has_ore", "ore_wheat_combo", "has_port", "has_generic_port", "has_specific_port", "port_match", "center_dist", "complement_score", "backup_count", "seat_1", "seat_2", "seat_3", "seat_4"], "trees": [[{"f": 2, "t": 9.5, "l": 1, "r": 8}, {"f": 2, "t": 7.5, "l": 2, "r": 5}, {"f": 2, "t": 6.5, "l": 3, "r": 4}, {"leaf": -0.8277763026463857}, {"leaf": -0.4901589393065964}, {"f": 16, "t": 3.5, "l": 6, "r": 7}, {"leaf": -0.46274883577048165}, {"leaf": -0.12059838895281923}, {"f": 16, "t": 6.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.33001326248141905}, {"leaf": 0.26855451365170074}, {"f": 2, "t": 11.5, "l": 13, "r": 14}, {"leaf": 0.37593462006607564}, {"leaf": 0.6945194372421661}], [{"f": 1, "t": 9.5, "l": 1, "r": 8}, {"f": 0, "t": 7.5, "l": 2, "r": 5}, {"f": 1, "t": 5.5, "l": 3, "r": 4}, {"leaf": -0.8856921782835793}, {"leaf": -0.5237609886814677}, {"f": 16, "t": 4.5, "l": 6, "r": 7}, {"leaf": -0.36344726129458893}, {"leaf": -0.07839468912018868}, {"f": 16, "t": 6.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.29085821681213864}, {"leaf": 0.2418731852670434}, {"f": 8, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.28311115168893425}, {"leaf": 0.5912002460276008}], [{"f": 2, "t": 9.5, "l": 1, "r": 8}, {"f": 2, "t": 7.5, "l": 2, "r": 5}, {"f": 1, "t": 5.5, "l": 3, "r": 4}, {"leaf": -0.8467264392417204}, {"leaf": -0.49445430732359275}, {"f": 16, "t": 5.5, "l": 6, "r": 7}, {"leaf": -0.2907272504244914}, {"leaf": -0.03621883656350209}, {"f": 16, "t": 2.5, "l": 9, "r": 12}, {"f": 10, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.49219109745399126}, {"leaf": 0.14771720823229595}, {"f": 8, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.14500378219921176}, {"leaf": 0.44869122042776244}], [{"f": 2, "t": 9.5, "l": 1, "r": 8}, {"f": 0, "t": 6.5, "l": 2, "r": 5}, {"f": 16, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.8457000140486591}, {"leaf": -0.6291490761132045}, {"f": 16, "t": 3.5, "l": 6, "r": 7}, {"leaf": -0.44608685767614775}, {"leaf": -0.13049753645922854}, {"f": 16, "t": 6.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.2839992218287846}, {"leaf": 0.2045448483493903}, {"f": 3, "t": 2.5, "l": 13, "r": 14}, {"leaf": 0.20990120062904832}, {"leaf": 0.5114565104359952}], [{"f": 1, "t": 10.5, "l": 1, "r": 8}, {"f": 0, "t": 8.5, "l": 2, "r": 5}, {"f": 1, "t": 6.5, "l": 3, "r": 4}, {"leaf": -0.6855355909227528}, {"leaf": -0.3108048699962164}, {"f": 16, "t": 4.5, "l": 6, "r": 7}, {"leaf": -0.2331645696413689}, {"leaf": 0.0642046035615318}, {"f": 8, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 5.5, "l": 10, "r": 11}, {"leaf": -0.31568858581252723}, {"leaf": 0.2706733056687234}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.3634351281396092}, {"leaf": 0.743172516484012}], [{"f": 1, "t": 9.5, "l": 1, "r": 8}, {"f": 0, "t": 7.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.584192634049233}, {"leaf": -0.25982157524246674}, {"f": 16, "t": 3.5, "l": 6, "r": 7}, {"leaf": -0.3559340096042755}, {"leaf": -0.06782687200187201}, {"f": 16, "t": 2.5, "l": 9, "r": 12}, {"f": 10, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.45890245233208965}, {"leaf": 0.11309439796013804}, {"f": 2, "t": 11.5, "l": 13, "r": 14}, {"leaf": 0.16003370367916112}, {"leaf": 0.41270965239555185}], [{"f": 2, "t": 10.5, "l": 1, "r": 8}, {"f": 2, "t": 8.5, "l": 2, "r": 5}, {"f": 16, "t": 5.5, "l": 3, "r": 4}, {"leaf": -0.47692075630980574}, {"leaf": -0.16791229086257872}, {"f": 8, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.15846703374422297}, {"leaf": 0.08295446952328278}, {"f": 8, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 5.5, "l": 10, "r": 11}, {"leaf": -0.2970166788427225}, {"leaf": 0.22276114213017703}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.3121895006962313}, {"leaf": 0.6361581941564519}], [{"f": 0, "t": 10.5, "l": 1, "r": 8}, {"f": 1, "t": 8.5, "l": 2, "r": 5}, {"f": 0, "t": 6.5, "l": 3, "r": 4}, {"leaf": -0.6011649426122125}, {"leaf": -0.2464549208835921}, {"f": 16, "t": 4.5, "l": 6, "r": 7}, {"leaf": -0.2002480560917492}, {"leaf": 0.05840910729371756}, {"f": 16, "t": 7.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.1335930213476777}, {"leaf": 0.22543888759802136}, {"f": 3, "t": 2.5, "l": 13, "r": 14}, {"leaf": 0.21066192733754438}, {"leaf": 0.5014990478353091}], [{"f": 0, "t": 10.5, "l": 1, "r": 8}, {"f": 1, "t": 7.5, "l": 2, "r": 5}, {"f": 0, "t": 5.5, "l": 3, "r": 4}, {"leaf": -0.6816474606706018}, {"leaf": -0.3382686351641535}, {"f": 16, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.4468017684097394}, {"leaf": -0.01834870116518984}, {"f": 3, "t": 2.5, "l": 9, "r": 12}, {"f": 16, "t": 10.0, "l": 10, "r": 11}, {"leaf": -0.0599190840202808}, {"leaf": 0.26151435284019436}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.251436876010542}, {"leaf": 0.567580891018211}], [{"f": 2, "t": 9.5, "l": 1, "r": 8}, {"f": 1, "t": 6.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.6177091624414761}, {"leaf": -0.3491211750720357}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.17902900027389962}, {"leaf": 0.174306780506809}, {"f": 16, "t": 2.5, "l": 9, "r": 12}, {"f": 10, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.4199382821463042}, {"leaf": 0.044148410643133164}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.12129378020948026}, {"leaf": 0.3677451170834804}], [{"f": 0, "t": 8.5, "l": 1, "r": 8}, {"f": 16, "t": 2.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.6268260144711434}, {"leaf": -0.12519379380958953}, {"f": 16, "t": 6.5, "l": 6, "r": 7}, {"leaf": -0.28835085841318214}, {"leaf": -0.07158221947532262}, {"f": 16, "t": 6.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.2949241326757176}, {"leaf": 0.08755974260538564}, {"f": 3, "t": 2.5, "l": 13, "r": 14}, {"leaf": 0.08478721479072623}, {"leaf": 0.2931025627754193}], [{"f": 2, "t": 10.5, "l": 1, "r": 8}, {"f": 16, "t": 5.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.34115136450593286}, {"leaf": 0.06057903243620062}, {"f": 21, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.03935490657223182}, {"leaf": 0.15533902208919792}, {"f": 8, "t": 0.5, "l": 9, "r": 12}, {"f": 3, "t": 2.5, "l": 10, "r": 11}, {"leaf": -0.10035616478013891}, {"leaf": 0.2012800021240424}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.3437122575244442}, {"leaf": 0.09774821493046319}], [{"f": 0, "t": 8.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.5872498948888027}, {"leaf": -0.231489782728714}, {"f": 0, "t": 5.5, "l": 6, "r": 7}, {"leaf": -0.4503117856128794}, {"leaf": 0.1077664061399102}, {"f": 16, "t": 6.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.26141688749945036}, {"leaf": 0.07247304757663398}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.11831545059828141}, {"leaf": 0.340409831202494}], [{"f": 1, "t": 10.5, "l": 1, "r": 8}, {"f": 16, "t": 1.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.5780905305514853}, {"leaf": -0.021979440310817625}, {"f": 8, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.1754779453110352}, {"leaf": 0.019161758192044017}, {"f": 16, "t": 3.5, "l": 9, "r": 12}, {"f": 10, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.25738663373675763}, {"leaf": 0.15444825920233632}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.137567730666413}, {"leaf": 0.3662852509836558}], [{"f": 2, "t": 8.5, "l": 1, "r": 8}, {"f": 2, "t": 5.5, "l": 2, "r": 5}, {"f": 0, "t": 4.5, "l": 3, "r": 4}, {"leaf": -0.7551798729679334}, {"leaf": -0.4985419492252221}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.23412134333859477}, {"leaf": 0.09333959004555158}, {"f": 16, "t": 2.5, "l": 9, "r": 12}, {"f": 10, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.38870224529479397}, {"leaf": 0.08306347060655506}, {"f": 8, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.006025401725579027}, {"leaf": 0.17175297867415465}], [{"f": 16, "t": 6.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 1.5, "l": 3, "r": 4}, {"leaf": -0.7007651988778606}, {"leaf": -0.2598149088487853}, {"f": 9, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.102092860569275}, {"leaf": 0.10192305887313595}, {"f": 1, "t": 11.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.10482505069629572}, {"leaf": -0.1034496306140826}, {"f": 8, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.13341493203874688}, {"leaf": 0.3462695291237449}], [{"f": 0, "t": 10.5, "l": 1, "r": 8}, {"f": 1, "t": 7.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.37867848348581873}, {"leaf": -0.08948881457366487}, {"f": 10, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.07834798527985312}, {"leaf": 0.11375713905346417}, {"f": 3, "t": 2.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.11275202800121657}, {"leaf": 0.1483298912818344}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.26802128153689975}, {"leaf": 0.026308796043864133}], [{"f": 16, "t": 7.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.572010080439349}, {"leaf": -0.1883999425124031}, {"f": 2, "t": 7.5, "l": 6, "r": 7}, {"leaf": -0.19968304841032983}, {"leaf": 0.049417210466273}, {"f": 3, "t": 2.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.04218125610546279}, {"leaf": 0.16310276655307607}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.28149793884267166}, {"leaf": 0.056656980856331335}], [{"f": 1, "t": 11.5, "l": 1, "r": 8}, {"f": 16, "t": 5.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.24219503119865216}, {"leaf": 0.06662556937047077}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.07744213813963337}, {"leaf": -0.1123462200580803}, {"f": 8, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 10.5, "l": 10, "r": 11}, {"leaf": -0.04303781527550571}, {"leaf": 0.23365576052884732}, {"f": 16, "t": 3.5, "l": 13, "r": 14}, {"leaf": -0.016552130711418284}, {"leaf": 0.28109201612331375}], [{"f": 16, "t": 6.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 1.5, "l": 3, "r": 4}, {"leaf": -0.6232429531677746}, {"leaf": -0.2099497870730441}, {"f": 16, "t": 2.5, "l": 6, "r": 7}, {"leaf": -0.17354335109288288}, {"leaf": 0.03681864668633606}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 2, "t": 11.5, "l": 10, "r": 11}, {"leaf": -0.003185635157642007}, {"leaf": 0.1467124970771236}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.1248565575989313}, {"leaf": 0.35213586192416846}], [{"f": 2, "t": 8.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.45413104694754497}, {"leaf": -0.16915494107482051}, {"f": 0, "t": 6.5, "l": 6, "r": 7}, {"leaf": -0.1960839574929714}, {"leaf": 0.156477563208378}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 3, "t": 2.5, "l": 10, "r": 11}, {"leaf": -0.061911535437805656}, {"leaf": 0.06898992001197463}, {"f": 10, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.11688833953675494}, {"leaf": 0.4265368174828316}], [{"f": 2, "t": 8.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 1.5, "l": 3, "r": 4}, {"leaf": -0.5040321346175238}, {"leaf": -0.17321777279829767}, {"f": 2, "t": 5.5, "l": 6, "r": 7}, {"leaf": -0.284647550312309}, {"leaf": 0.11378892464474141}, {"f": 3, "t": 2.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.133429184782185}, {"leaf": 0.06546193728128852}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.06541908868786252}, {"leaf": 0.24239271518543223}], [{"f": 2, "t": 11.5, "l": 1, "r": 8}, {"f": 16, "t": 4.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.25181062736829196}, {"leaf": 0.059687301215941284}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.04566174444836355}, {"leaf": -0.10269777001363437}, {"f": 3, "t": 2.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.07503592777528498}, {"leaf": 0.15092563509767204}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.15731091069054623}, {"leaf": 0.37620619952317297}], [{"f": 16, "t": 7.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 3, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.29146812793332944}, {"leaf": -0.06776052368255198}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.05065022566045078}, {"leaf": -0.1185508487078145}, {"f": 0, "t": 10.5, "l": 9, "r": 12}, {"f": 11, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.007970673012104728}, {"leaf": 0.1818415812373832}, {"f": 3, "t": 1.5, "l": 13, "r": 14}, {"leaf": -0.33474147113820574}, {"leaf": 0.1653223034750441}], [{"f": 16, "t": 6.5, "l": 1, "r": 8}, {"f": 10, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 1.5, "l": 3, "r": 4}, {"leaf": -0.4066171367347864}, {"leaf": -0.09142817792080027}, {"f": 21, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.012194105076052422}, {"leaf": 0.2687797083460447}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.01565859028363306}, {"leaf": 0.14335631703659338}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.08536429074170636}, {"leaf": 0.2958702216931841}], [{"f": 1, "t": 11.5, "l": 1, "r": 8}, {"f": 0, "t": 6.5, "l": 2, "r": 5}, {"f": 1, "t": 4.5, "l": 3, "r": 4}, {"leaf": -0.6271317387195496}, {"leaf": -0.2748364835580652}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.03068958481367063}, {"leaf": 0.21307836378853084}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 10, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.026624777619648453}, {"leaf": 0.2052797647485834}, {"f": 3, "t": 2.5, "l": 13, "r": 14}, {"leaf": 0.13575964002214563}, {"leaf": 0.3275353163299321}], [{"f": 3, "t": 2.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 9.5, "l": 3, "r": 4}, {"leaf": -0.2200453292751309}, {"leaf": 0.019308905949647525}, {"f": 16, "t": 9.5, "l": 6, "r": 7}, {"leaf": -0.02641208877230615}, {"leaf": 0.1742745943114342}, {"f": 16, "t": 7.5, "l": 9, "r": 12}, {"f": 21, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.006166128163073267}, {"leaf": 0.10836053909340408}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.18723639034525924}, {"leaf": 0.026103017959846233}], [{"f": 16, "t": 3.5, "l": 1, "r": 8}, {"f": 10, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.2847032562813454}, {"leaf": 0.10115042702732129}, {"f": 7, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.01517539458215108}, {"leaf": 0.2339493477487031}, {"f": 2, "t": 11.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.02981572163279933}, {"leaf": -0.09393569906605545}, {"f": 8, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.056628616421388674}, {"leaf": 0.1859940921326247}], [{"f": 3, "t": 2.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.23636071663459185}, {"leaf": -0.08354312571088486}, {"f": 16, "t": 7.5, "l": 6, "r": 7}, {"leaf": -0.04040527444850796}, {"leaf": 0.100918597921482}, {"f": 1, "t": 9.5, "l": 9, "r": 12}, {"f": 15, "t": 2.3228381872177124, "l": 10, "r": 11}, {"leaf": 0.04207844719566573}, {"leaf": -0.10115970826491252}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.12861729554817686}, {"leaf": -0.025490948129051248}], [{"f": 3, "t": 2.5, "l": 1, "r": 8}, {"f": 16, "t": 9.5, "l": 2, "r": 5}, {"f": 11, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.16595819532811087}, {"leaf": 0.04523093632769138}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.31381143193745753}, {"leaf": 0.1114711405663416}, {"f": 16, "t": 7.5, "l": 9, "r": 12}, {"f": 21, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.009126595523541102}, {"leaf": 0.10728156824749674}, {"f": 0, "t": 10.5, "l": 13, "r": 14}, {"leaf": 0.043376828560809405}, {"leaf": 0.16283340722275993}], [{"f": 16, "t": 2.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.3363363590562584}, {"leaf": -0.023804325149095574}, {"f": 8, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.06308269305773843}, {"leaf": 0.3426428863246708}, {"f": 2, "t": 10.5, "l": 9, "r": 12}, {"f": 0, "t": 6.5, "l": 10, "r": 11}, {"leaf": -0.2448990210008218}, {"leaf": -0.003214332491883338}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.045782218031037984}, {"leaf": 0.17236434403643025}], [{"f": 16, "t": 2.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.46353664080247836}, {"leaf": -0.07720860593552632}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.1279185860372658}, {"leaf": 0.2969068218215855}, {"f": 2, "t": 11.5, "l": 9, "r": 12}, {"f": 21, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.02886001228537691}, {"leaf": 0.07378825782989365}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.14638821893409493}, {"leaf": -0.00045104520313898796}], [{"f": 0, "t": 7.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.4201314998685978}, {"leaf": -0.15862332877390412}, {"f": 2, "t": 5.5, "l": 6, "r": 7}, {"leaf": -0.29310206567572455}, {"leaf": 0.024116483815675695}, {"f": 8, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 9.5, "l": 10, "r": 11}, {"leaf": -0.08578333250324749}, {"leaf": 0.09120288607623062}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.09602344755793835}, {"leaf": -0.04672244539416598}], [{"f": 16, "t": 3.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.3635417488466256}, {"leaf": -0.03828903907109909}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.07156166572591466}, {"leaf": 0.2651582009246175}, {"f": 0, "t": 11.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.0229581582272254}, {"leaf": -0.07415455663217291}, {"f": 8, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.02191359430001745}, {"leaf": 0.1362669316718289}], [{"f": 0, "t": 8.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.3345681509230195}, {"leaf": -0.08921739308007472}, {"f": 2, "t": 5.5, "l": 6, "r": 7}, {"leaf": -0.25492623766571193}, {"leaf": 0.07171856034742981}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.03783239605713841}, {"leaf": 0.07913899314497383}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.015719786569448793}, {"leaf": 0.20474126552250307}], [{"f": 10, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 5.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.13982862500766252}, {"leaf": 0.09586920126074643}, {"f": 16, "t": 11.5, "l": 6, "r": 7}, {"leaf": 0.004223577471058444}, {"leaf": 0.14644133045298324}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.01701470602677452}, {"leaf": 0.17549301648446172}, {"f": 1, "t": 7.5, "l": 13, "r": 14}, {"leaf": 0.018270071075806}, {"leaf": 0.27667318793293855}], [{"f": 3, "t": 2.5, "l": 1, "r": 8}, {"f": 5, "t": 0.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.08809513282747149}, {"leaf": 0.05971507971996005}, {"f": 7, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.10396291732587604}, {"leaf": -0.318841456170018}, {"f": 0, "t": 12.5, "l": 9, "r": 12}, {"f": 15, "t": 2.3228381872177124, "l": 10, "r": 11}, {"leaf": 0.0828855934093438}, {"leaf": 0.0013176118551119173}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.16425107657360705}, {"leaf": 0.3682296300706292}], [{"f": 16, "t": 1.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.36309628211166184}, {"leaf": 0.0273874253030066}, {"f": 1, "t": 6.5, "l": 6, "r": 7}, {"leaf": -0.01043009891832577}, {"leaf": 0.3552915861765385}, {"f": 2, "t": 11.5, "l": 9, "r": 12}, {"f": 11, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.022464387527647383}, {"leaf": 0.09239654307365112}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.11992284729814699}, {"leaf": -0.0021676346655469885}], [{"f": 8, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 5.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.2125164791107738}, {"leaf": -0.006701542991586053}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.31217683747791763}, {"leaf": 0.028046767148115548}, {"f": 18, "t": 0.5, "l": 9, "r": 12}, {"f": 19, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.10014804972930527}, {"leaf": -0.009690222366517629}, {"f": 2, "t": 12.5, "l": 13, "r": 14}, {"leaf": -0.06546272625577748}, {"leaf": 0.152253189182582}], [{"f": 2, "t": 7.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.3702366456476504}, {"leaf": -0.11073773515170153}, {"f": 0, "t": 4.5, "l": 6, "r": 7}, {"leaf": -0.49773072852531985}, {"leaf": -0.018493925427381923}, {"f": 5, "t": 0.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.02088709871629544}, {"leaf": 0.08484907226488135}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.08087778900390652}, {"leaf": 0.09123488470624756}], [{"f": 16, "t": 1.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.3421460382123664}, {"leaf": 0.01782431072239379}, {"f": 0, "t": 6.5, "l": 6, "r": 7}, {"leaf": -0.009493388605391338}, {"leaf": 0.30832180173335333}, {"f": 16, "t": 11.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.045149307883659374}, {"leaf": 0.03320970923832793}, {"f": 3, "t": 1.5, "l": 13, "r": 14}, {"leaf": -0.3814506643293033}, {"leaf": 0.1659943121503598}], [{"f": 16, "t": 8.5, "l": 1, "r": 8}, {"f": 10, "t": 0.5, "l": 2, "r": 5}, {"f": 6, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.10335648230784863}, {"leaf": 0.010613421043989352}, {"f": 21, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.010585557913489545}, {"leaf": 0.19461354044158005}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.34914572355888324}, {"leaf": 0.03562401910670373}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.10134854040311894}, {"leaf": -0.012511788756011206}], [{"f": 0, "t": 6.5, "l": 1, "r": 8}, {"f": 0, "t": 4.5, "l": 2, "r": 5}, {"f": 0, "t": 3.5, "l": 3, "r": 4}, {"leaf": -0.6485638018245176}, {"leaf": -0.44504559039878905}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.22937037083946957}, {"leaf": 0.011338919957644208}, {"f": 11, "t": 0.5, "l": 9, "r": 12}, {"f": 4, "t": 2.5, "l": 10, "r": 11}, {"leaf": -0.22371912242832065}, {"leaf": 0.010046727433079548}, {"f": 0, "t": 8.5, "l": 13, "r": 14}, {"leaf": 0.09655055220884384}, {"leaf": 0.20204209153533492}], [{"f": 2, "t": 8.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.27628952035993515}, {"leaf": -0.06557799556464207}, {"f": 0, "t": 5.5, "l": 6, "r": 7}, {"leaf": -0.21201584187440692}, {"leaf": 0.06465735953065456}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.033328014215883946}, {"leaf": 0.06394190793919947}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.009275930432406654}, {"leaf": 0.170262023947767}], [{"f": 2, "t": 12.5, "l": 1, "r": 8}, {"f": 16, "t": 1.5, "l": 2, "r": 5}, {"f": 5, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.08433999172268535}, {"leaf": -0.3401533255444178}, {"f": 21, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.018216980937984243}, {"leaf": 0.05588576865352968}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.1377888864747638}, {"leaf": -0.058075056845177976}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.3301365180661503}, {"leaf": 0.1519324423107843}], [{"f": 10, "t": 0.5, "l": 1, "r": 8}, {"f": 6, "t": 0.5, "l": 2, "r": 5}, {"f": 5, "t": 0.5, "l": 3, "r": 4}, {"leaf": 0.0009433058997819718}, {"leaf": -0.10190426550010445}, {"f": 5, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.0076256436705471895}, {"leaf": 0.07302128277648556}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.019777849578105987}, {"leaf": 0.14797029131304737}, {"f": 1, "t": 7.5, "l": 13, "r": 14}, {"leaf": 0.010763184011055768}, {"leaf": 0.20379922855609608}], [{"f": 16, "t": 4.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.2302715525170093}, {"leaf": 0.05767615512305859}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.029595367528308023}, {"leaf": 0.214664587937958}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.017983771551262673}, {"leaf": 0.05793227107545346}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.0001855590773682889}, {"leaf": 0.1559955736629493}], [{"f": 16, "t": 11.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.15211639185694698}, {"leaf": -0.010593674836061218}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.044445803407806864}, {"leaf": -0.0470738780181935}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.45447429758654784}, {"leaf": -0.011290920799564952}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.10351255199360872}, {"leaf": 0.23573167182899926}], [{"f": 16, "t": 1.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.29415359493338433}, {"leaf": 0.014409770133575433}, {"f": 1, "t": 7.5, "l": 6, "r": 7}, {"leaf": 0.002557627834861202}, {"leaf": 0.3348677473985447}, {"f": 16, "t": 11.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.03436788696859753}, {"leaf": 0.027214477476205787}, {"f": 3, "t": 1.5, "l": 13, "r": 14}, {"leaf": -0.26389298281878476}, {"leaf": 0.13130330880192018}], [{"f": 16, "t": 2.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.39343893679345965}, {"leaf": -0.13990700874261866}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.07407700948341314}, {"leaf": 0.18978181280658532}, {"f": 0, "t": 12.5, "l": 9, "r": 12}, {"f": 11, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.005587059206219667}, {"leaf": 0.09310415298178053}, {"f": 10, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.0824291329007188}, {"leaf": 0.24979057844042954}], [{"f": 2, "t": 6.5, "l": 1, "r": 8}, {"f": 1, "t": 4.5, "l": 2, "r": 5}, {"f": 12, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.47111495706322626}, {"leaf": -0.28694520984007466}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.20119405579077085}, {"leaf": -0.0038834624716022727}, {"f": 11, "t": 0.5, "l": 9, "r": 12}, {"f": 4, "t": 2.5, "l": 10, "r": 11}, {"leaf": -0.19039723084760013}, {"leaf": 0.009468672017703765}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.09210768229914193}, {"leaf": 0.21316214164187294}], [{"f": 16, "t": 8.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.19190422670133503}, {"leaf": -0.029703869563949086}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.0337990385310813}, {"leaf": -0.054619686415289866}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.35899144036328423}, {"leaf": 0.02536740385108376}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.07976404760783891}, {"leaf": -0.010463074280619822}], [{"f": 0, "t": 8.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 15, "t": 2.3228381872177124, "l": 3, "r": 4}, {"leaf": -0.038039080717601946}, {"leaf": -0.18094915849521695}, {"f": 0, "t": 5.5, "l": 6, "r": 7}, {"leaf": -0.18688341940217051}, {"leaf": 0.048986133321255065}, {"f": 11, "t": 0.5, "l": 9, "r": 12}, {"f": 3, "t": 2.5, "l": 10, "r": 11}, {"leaf": -0.03715853541508434}, {"leaf": 0.040950917417016}, {"f": 14, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.11558640675778438}, {"leaf": 0.24771720993840798}], [{"f": 3, "t": 2.5, "l": 1, "r": 8}, {"f": 5, "t": 0.5, "l": 2, "r": 5}, {"f": 2, "t": 6.5, "l": 3, "r": 4}, {"leaf": -0.15333311000531577}, {"leaf": 0.0321568342154041}, {"f": 7, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.07306219271113064}, {"leaf": -0.27041183312205935}, {"f": 15, "t": 2.3228381872177124, "l": 9, "r": 12}, {"f": 6, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.021403777305533268}, {"leaf": 0.11778986306497047}, {"f": 0, "t": 9.5, "l": 13, "r": 14}, {"leaf": -0.08303618263078204}, {"leaf": 0.015979221625662614}], [{"f": 1, "t": 10.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 12, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.05236005387482685}, {"leaf": 0.12686907706586556}, {"f": 2, "t": 7.5, "l": 6, "r": 7}, {"leaf": 0.0059884173514031585}, {"leaf": 0.19476029566001868}, {"f": 18, "t": 0.5, "l": 9, "r": 12}, {"f": 19, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.08855737859027121}, {"leaf": -0.010034965184375591}, {"f": 10, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.07581812689300563}, {"leaf": 0.03286651162765999}], [{"f": 16, "t": 7.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.188019487055155}, {"leaf": -0.04700999948047946}, {"f": 5, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.03136253118052093}, {"leaf": -0.03882598963188474}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.2997540477486331}, {"leaf": 0.05836748204726909}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.020454029562774412}, {"leaf": 0.09526364406113887}], [{"f": 9, "t": 0.5, "l": 1, "r": 8}, {"f": 6, "t": 0.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.2866094501871242}, {"leaf": -0.029007319461906014}, {"f": 15, "t": 2.3228381872177124, "l": 6, "r": 7}, {"leaf": 0.08127289163328458}, {"leaf": -0.01204033268876311}, {"f": 18, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 8.5, "l": 10, "r": 11}, {"leaf": 0.028631376980306614}, {"leaf": 0.12743277815635584}, {"f": 1, "t": 12.5, "l": 13, "r": 14}, {"leaf": -0.07157926485779857}, {"leaf": 0.0930083911618221}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 3, "t": 2.5, "l": 2, "r": 5}, {"f": 5, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.006452830281204583}, {"leaf": -0.11427713102312302}, {"f": 15, "t": 2.3228381872177124, "l": 6, "r": 7}, {"leaf": 0.06664268064892936}, {"leaf": -0.010235929186866062}, {"f": 1, "t": 8.5, "l": 9, "r": 12}, {"f": 2, "t": 4.5, "l": 10, "r": 11}, {"leaf": -0.3440165898772591}, {"leaf": 0.07783649767021632}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.18251541574917263}, {"leaf": 0.40989348903669065}], [{"f": 16, "t": 11.5, "l": 1, "r": 8}, {"f": 10, "t": 0.5, "l": 2, "r": 5}, {"f": 6, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.05517238037835635}, {"leaf": 0.019453625924121313}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.07037358270114365}, {"leaf": -0.044119776244539236}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 5, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.08198530834080645}, {"leaf": -0.5693330593572267}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.08199668916584338}, {"leaf": 0.19459565438539925}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 4.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.1120033805764267}, {"leaf": 0.025908747305700152}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.13343969576322606}, {"leaf": 0.014855608392171607}, {"f": 1, "t": 8.5, "l": 9, "r": 12}, {"f": 9, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.013235143533578448}, {"leaf": 0.1425922633649191}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.1897271864069059}, {"leaf": 0.3892788820870934}], [{"f": 2, "t": 12.5, "l": 1, "r": 8}, {"f": 12, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.02035713768132349}, {"leaf": 0.08650834210027077}, {"f": 1, "t": 7.5, "l": 6, "r": 7}, {"leaf": 0.015116455058513618}, {"leaf": 0.21838029929541145}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.11044233900326071}, {"leaf": -0.0538503556789758}, {"f": 5, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.26514912921745853}, {"leaf": 0.1431015544540744}], [{"f": 16, "t": 10.5, "l": 1, "r": 8}, {"f": 3, "t": 2.5, "l": 2, "r": 5}, {"f": 11, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.07542935346574187}, {"leaf": 0.04381815505319782}, {"f": 15, "t": 2.3228381872177124, "l": 6, "r": 7}, {"leaf": 0.05542551902088168}, {"leaf": -0.008088879393661435}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.333293640951127}, {"leaf": -0.022677721189112626}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.04907471069536354}, {"leaf": 0.15045074180118218}], [{"f": 1, "t": 10.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.18083865531370333}, {"leaf": -0.014026290971264026}, {"f": 1, "t": 7.5, "l": 6, "r": 7}, {"leaf": -0.031032077674326537}, {"leaf": 0.10747420315987379}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 21, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.009350630418259686}, {"leaf": 0.06556415247131585}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.04853475100276194}, {"leaf": 0.20191077404924856}], [{"f": 16, "t": 1.5, "l": 1, "r": 8}, {"f": 5, "t": 0.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.1296737739528733}, {"leaf": 0.1122194606778384}, {"f": 16, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.3252113135146676}, {"leaf": -0.05806499164289654}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.02582137949191572}, {"leaf": 0.028183092487643203}, {"f": 7, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.09875717979149927}, {"leaf": -0.017203653930695745}], [{"f": 1, "t": 6.5, "l": 1, "r": 8}, {"f": 1, "t": 4.5, "l": 2, "r": 5}, {"f": 6, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.43878204209789434}, {"leaf": -0.061163408188214995}, {"f": 11, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.20361857861425606}, {"leaf": -0.053134793332966515}, {"f": 12, "t": 0.5, "l": 9, "r": 12}, {"f": 14, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.006285606571132203}, {"leaf": 0.10675008223262383}, {"f": 2, "t": 8.5, "l": 13, "r": 14}, {"leaf": 0.1166727878875955}, {"leaf": 0.20250278528828702}], [{"f": 5, "t": 0.5, "l": 1, "r": 8}, {"f": 10, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.014356891707832258}, {"leaf": 0.1053964748208757}, {"f": 2, "t": 10.5, "l": 6, "r": 7}, {"leaf": 0.029314063678016644}, {"leaf": 0.11368985057249946}, {"f": 6, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.3294524461250591}, {"leaf": -0.056603071310293275}, {"f": 15, "t": 2.3228381872177124, "l": 13, "r": 14}, {"leaf": 0.14274155821515722}, {"leaf": 0.014851270184733655}], [{"f": 16, "t": 11.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 9.5, "l": 3, "r": 4}, {"leaf": -0.05472686022333019}, {"leaf": 0.06430495382289439}, {"f": 21, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.004898796769255792}, {"leaf": 0.06327107538940935}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 5, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.08506190616201878}, {"leaf": -0.48195179595484056}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.11256527448263878}, {"leaf": 0.015139762556240027}], [{"f": 2, "t": 12.5, "l": 1, "r": 8}, {"f": 4, "t": 1.5, "l": 2, "r": 5}, {"f": 15, "t": 4.179386377334595, "l": 3, "r": 4}, {"leaf": -0.3889479405580149}, {"leaf": -0.17782260129190194}, {"f": 12, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.006971819128465641}, {"leaf": 0.1288530887611809}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.1127648115569759}, {"leaf": -0.0713809187711201}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.20567802858933587}, {"leaf": 0.04553880773949869}], [{"f": 0, "t": 8.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 15, "t": 2.3228381872177124, "l": 3, "r": 4}, {"leaf": -0.013284784301030987}, {"leaf": -0.13251670367566726}, {"f": 2, "t": 6.5, "l": 6, "r": 7}, {"leaf": -0.0977154637273426}, {"leaf": 0.054423332128846744}, {"f": 14, "t": 0.5, "l": 9, "r": 12}, {"f": 3, "t": 1.5, "l": 10, "r": 11}, {"leaf": -0.15647482780542138}, {"leaf": 0.01630403286513772}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.13891206643456208}, {"leaf": 0.3083700858280524}], [{"f": 15, "t": 2.3228381872177124, "l": 1, "r": 8}, {"f": 6, "t": 0.5, "l": 2, "r": 5}, {"f": 5, "t": 0.5, "l": 3, "r": 4}, {"leaf": 0.05197315343460179}, {"leaf": -0.03494733974945185}, {"f": 5, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.017411063001136904}, {"leaf": 0.12712836134539274}, {"f": 5, "t": 0.5, "l": 9, "r": 12}, {"f": 0, "t": 5.5, "l": 10, "r": 11}, {"leaf": -0.1786469908790015}, {"leaf": 0.02052534641295742}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.07277667330306102}, {"leaf": 0.01430771911575982}], [{"f": 0, "t": 12.5, "l": 1, "r": 8}, {"f": 18, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.025858737393966387}, {"leaf": 0.039858429881906805}, {"f": 6, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.07509208497922143}, {"leaf": 0.019710572681765664}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 11.0, "l": 10, "r": 11}, {"leaf": 0.008925693352939404}, {"leaf": 0.12043420924917822}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.20436557113251863}, {"leaf": 0.05416933623823922}], [{"f": 5, "t": 0.5, "l": 1, "r": 8}, {"f": 18, "t": 0.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.012304379512685305}, {"leaf": 0.059390376017494265}, {"f": 0, "t": 12.5, "l": 6, "r": 7}, {"leaf": -0.037867220351348034}, {"leaf": 0.07795620141516271}, {"f": 6, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.30382586970977643}, {"leaf": -0.04310358872784193}, {"f": 17, "t": 6.5, "l": 13, "r": 14}, {"leaf": 0.02092993202585805}, {"leaf": 0.11621506592514426}], [{"f": 0, "t": 7.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 15, "t": 2.3228381872177124, "l": 3, "r": 4}, {"leaf": -0.03019685531228669}, {"leaf": -0.19099215495224062}, {"f": 2, "t": 4.5, "l": 6, "r": 7}, {"leaf": -0.3039059082128347}, {"leaf": 0.0012091593214164278}, {"f": 11, "t": 0.5, "l": 9, "r": 12}, {"f": 1, "t": 9.5, "l": 10, "r": 11}, {"leaf": -0.039095888978202036}, {"leaf": 0.017541407184088618}, {"f": 13, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.15983364322793647}, {"leaf": 0.0630086484491731}], [{"f": 12, "t": 0.5, "l": 1, "r": 8}, {"f": 15, "t": 2.3228381872177124, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.17085808331897986}, {"leaf": 0.030283145650455895}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.031566556842500176}, {"leaf": 0.06370134194632858}, {"f": 0, "t": 6.5, "l": 9, "r": 12}, {"f": 1, "t": 4.5, "l": 10, "r": 11}, {"leaf": -0.28942007113808926}, {"leaf": 0.04213813088629093}, {"f": 7, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.17421305091660955}, {"leaf": 0.0564958994603294}], [{"f": 0, "t": 12.5, "l": 1, "r": 8}, {"f": 16, "t": 1.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.14099080123548208}, {"leaf": 0.15490964640439342}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.011602307219037346}, {"leaf": -0.029373590112338952}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.0879253709402787}, {"leaf": -0.0442056934875397}, {"f": 5, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.1832433618291387}, {"leaf": 0.04713790343471684}], [{"f": 16, "t": 11.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.10608462827539318}, {"leaf": -0.001861556479096423}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.026404408418015304}, {"leaf": -0.04148108878425428}, {"f": 9, "t": 0.5, "l": 9, "r": 12}, {"f": 17, "t": 8.5, "l": 10, "r": 11}, {"leaf": 0.04748309964495552}, {"leaf": -0.1386007647183817}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.07661092412513568}, {"leaf": 0.39189161655533183}], [{"f": 16, "t": 10.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.11664048983137142}, {"leaf": -0.009775194235111532}, {"f": 2, "t": 10.5, "l": 6, "r": 7}, {"leaf": -0.003781146951875829}, {"leaf": 0.043075287692263195}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.2965182483192716}, {"leaf": 0.07013904631502518}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.07125395878376468}, {"leaf": 0.0019749035135325182}], [{"f": 16, "t": 4.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.1377111784761649}, {"leaf": -0.015301259161223643}, {"f": 2, "t": 4.5, "l": 6, "r": 7}, {"leaf": -0.2582553382017557}, {"leaf": 0.14418071419763376}, {"f": 9, "t": 0.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.06087996023434657}, {"leaf": 0.014471302613965852}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.0013554774078559902}, {"leaf": 0.1067428892020719}], [{"f": 16, "t": 11.5, "l": 1, "r": 8}, {"f": 5, "t": 0.5, "l": 2, "r": 5}, {"f": 18, "t": 0.5, "l": 3, "r": 4}, {"leaf": 0.024676087633948546}, {"leaf": -0.034293767245100915}, {"f": 6, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.05848569570996619}, {"leaf": 0.052062185658456106}, {"f": 20, "t": 0.5, "l": 9, "r": 12}, {"f": 21, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.008915478260314073}, {"leaf": 0.10123692612544433}, {"f": 15, "t": 2.645697236061096, "l": 13, "r": 14}, {"leaf": 0.0717516733242343}, {"leaf": 0.2143505070005112}], [{"f": 9, "t": 0.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 6, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.22650054028813474}, {"leaf": -0.014383936866818822}, {"f": 15, "t": 3.6055208444595337, "l": 6, "r": 7}, {"leaf": 0.008721312537104571}, {"leaf": -0.07227302656685491}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.027558963136612793}, {"leaf": 0.05351646071433934}, {"f": 16, "t": 10.5, "l": 13, "r": 14}, {"leaf": 0.06488441893748888}, {"leaf": 0.24791017703579146}], [{"f": 1, "t": 12.5, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 12, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.013716870046591197}, {"leaf": 0.08746038085372264}, {"f": 1, "t": 8.5, "l": 6, "r": 7}, {"leaf": 0.03510292798266468}, {"leaf": 0.14969540058109537}, {"f": 8, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 11.0, "l": 10, "r": 11}, {"leaf": -0.05031433402485785}, {"leaf": 0.09557585290551482}, {"f": 18, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.14720743859333243}, {"leaf": 0.03059667213907045}], [{"f": 1, "t": 12.5, "l": 1, "r": 8}, {"f": 2, "t": 7.5, "l": 2, "r": 5}, {"f": 16, "t": 5.5, "l": 3, "r": 4}, {"leaf": -0.09301114872314427}, {"leaf": 0.012228429153742839}, {"f": 11, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.003638592786687301}, {"leaf": 0.06888018653974774}, {"f": 8, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 11.0, "l": 10, "r": 11}, {"leaf": -0.028142116646090745}, {"leaf": 0.08876234242667898}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.07383796088289249}, {"leaf": 0.19634682983031645}], [{"f": 15, "t": 2.3228381872177124, "l": 1, "r": 8}, {"f": 4, "t": 2.5, "l": 2, "r": 5}, {"f": 17, "t": 7.5, "l": 3, "r": 4}, {"leaf": -0.17675746837452325}, {"leaf": -0.046404619855949326}, {"f": 6, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.009503296920828144}, {"leaf": 0.05453860704456516}, {"f": 14, "t": 0.5, "l": 9, "r": 12}, {"f": 12, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.03231458854549129}, {"leaf": 0.07934099620496113}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.01391884806552407}, {"leaf": 0.13063595605071743}], [{"f": 8, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 9.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.11811456012867218}, {"leaf": -0.0157900651076357}, {"f": 3, "t": 2.5, "l": 6, "r": 7}, {"leaf": 0.014360883155783483}, {"leaf": 0.14056181471597173}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.02089981061655558}, {"leaf": 0.0428018022595788}, {"f": 7, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.08796620810051005}, {"leaf": 0.00015822095864695114}], [{"f": 0, "t": 8.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 15, "t": 2.3228381872177124, "l": 3, "r": 4}, {"leaf": -0.00847534106684726}, {"leaf": -0.10950889616945658}, {"f": 15, "t": 3.6055208444595337, "l": 6, "r": 7}, {"leaf": 0.053805066611506}, {"leaf": -0.0596835089364621}, {"f": 19, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.03608833144927488}, {"leaf": -0.009350116857375045}, {"f": 7, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.04723541089657959}, {"leaf": 0.00989272882465137}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 1.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.17677079875513332}, {"leaf": 0.039993949249009196}, {"f": 2, "t": 10.5, "l": 6, "r": 7}, {"leaf": -0.013867380045054504}, {"leaf": 0.016433433367805204}, {"f": 2, "t": 8.5, "l": 9, "r": 12}, {"f": 5, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.07207351832368283}, {"leaf": -0.04479489349843631}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.09057470447222929}, {"leaf": 0.2377154435094371}], [{"f": 9, "t": 0.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 6, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.20143080501467245}, {"leaf": -0.005372379379716353}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.0029396082932712135}, {"leaf": 0.0836766014632698}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.02220191962385159}, {"leaf": 0.045336587741860376}, {"f": 2, "t": 7.5, "l": 13, "r": 14}, {"leaf": -0.059492339619793194}, {"leaf": 0.0952325592949729}], [{"f": 16, "t": 4.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 7, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.034177613304640336}, {"leaf": -0.16215629885888344}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.007551399901629964}, {"leaf": 0.11725497085628614}, {"f": 12, "t": 0.5, "l": 9, "r": 12}, {"f": 15, "t": 2.3228381872177124, "l": 10, "r": 11}, {"leaf": 0.02532293155107775}, {"leaf": -0.002083142232100699}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.07529764277933172}, {"leaf": 0.16578297209925344}], [{"f": 12, "t": 0.5, "l": 1, "r": 8}, {"f": 15, "t": 2.3228381872177124, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.1388775638425431}, {"leaf": 0.018621740893627}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.02767030264289686}, {"leaf": 0.0472071717725211}, {"f": 1, "t": 6.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.03070359913786184}, {"leaf": -0.17447850193976885}, {"f": 15, "t": 3.6055208444595337, "l": 13, "r": 14}, {"leaf": 0.13745948489031973}, {"leaf": 0.04004195707298773}], [{"f": 2, "t": 4.5, "l": 1, "r": 8}, {"f": 0, "t": 3.5, "l": 2, "r": 5}, {"f": 15, "t": 3.1255983114242554, "l": 3, "r": 4}, {"leaf": 0.9523391569709134}, {"leaf": -0.49664159246172174}, {"f": 15, "t": 4.358865976333618, "l": 6, "r": 7}, {"leaf": -0.3075007280471583}, {"leaf": 0.028443409800014308}, {"f": 12, "t": 0.5, "l": 9, "r": 12}, {"f": 14, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.006258019753306429}, {"leaf": 0.05864061409811547}, {"f": 0, "t": 8.5, "l": 13, "r": 14}, {"leaf": 0.04914329352664724}, {"leaf": 0.15350917466189132}], [{"f": 1, "t": 11.5, "l": 1, "r": 8}, {"f": 12, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 5.5, "l": 3, "r": 4}, {"leaf": -0.03627567506881995}, {"leaf": 0.003300919807058125}, {"f": 0, "t": 6.5, "l": 6, "r": 7}, {"leaf": -0.01412171603926556}, {"leaf": 0.09848316777375465}, {"f": 20, "t": 0.5, "l": 9, "r": 12}, {"f": 21, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.018842684733666935}, {"leaf": 0.07146185121843339}, {"f": 3, "t": 2.5, "l": 13, "r": 14}, {"leaf": 0.009510784125227668}, {"leaf": 0.12479446524343375}], [{"f": 15, "t": 3.6055208444595337, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 12, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.0025369903805448793}, {"leaf": 0.0966981484020239}, {"f": 9, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.037423323589008885}, {"leaf": 0.15344363464634064}, {"f": 11, "t": 0.5, "l": 9, "r": 12}, {"f": 16, "t": 5.5, "l": 10, "r": 11}, {"leaf": -0.23659219194511008}, {"leaf": -0.007771215140135846}, {"f": 0, "t": 8.5, "l": 13, "r": 14}, {"leaf": -0.06283601140925917}, {"leaf": 0.0420181164989609}], [{"f": 1, "t": 8.5, "l": 1, "r": 8}, {"f": 12, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.06286289772746421}, {"leaf": 0.015914008667364074}, {"f": 18, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.06629392482256533}, {"leaf": -0.04052454314387524}, {"f": 9, "t": 0.5, "l": 9, "r": 12}, {"f": 6, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.034083850373852795}, {"leaf": 0.019138174838621638}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.0058706531559129}, {"leaf": 0.0889615075003798}], [{"f": 8, "t": 0.5, "l": 1, "r": 8}, {"f": 3, "t": 2.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.11243790646669745}, {"leaf": -0.02248334190716852}, {"f": 16, "t": 4.5, "l": 6, "r": 7}, {"leaf": -0.10241264685072445}, {"leaf": 0.04733884692866428}, {"f": 1, "t": 11.5, "l": 9, "r": 12}, {"f": 21, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.011808851728109825}, {"leaf": 0.032669863715571235}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.02219051087549438}, {"leaf": 0.1102971531833384}], [{"f": 2, "t": 4.5, "l": 1, "r": 8}, {"f": 12, "t": 0.5, "l": 2, "r": 5}, {"f": 6, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.38820515987614823}, {"leaf": -0.033818000732177625}, {"f": 17, "t": 3.5, "l": 6, "r": 7}, {"leaf": -0.14362039666025328}, {"leaf": -0.6201765510213644}, {"f": 14, "t": 0.5, "l": 9, "r": 12}, {"f": 0, "t": 9.5, "l": 10, "r": 11}, {"leaf": -0.025250507971898595}, {"leaf": 0.00817818797076986}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.019716621326096133}, {"leaf": 0.11321189140172105}], [{"f": 15, "t": 2.3228381872177124, "l": 1, "r": 8}, {"f": 3, "t": 1.5, "l": 2, "r": 5}, {"f": 5, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.1432457789036626}, {"leaf": -0.5009033940934037}, {"f": 4, "t": 2.5, "l": 6, "r": 7}, {"leaf": -0.12228107169905825}, {"leaf": 0.02158168980215351}, {"f": 15, "t": 2.645697236061096, "l": 9, "r": 12}, {"f": 4, "t": 2.5, "l": 10, "r": 11}, {"leaf": -0.3031423913634559}, {"leaf": -0.03858876605041104}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.021919693672044004}, {"leaf": 0.021962805050536036}], [{"f": 8, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 9.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.09246215366612968}, {"leaf": -0.01497340296013965}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.2635626597578552}, {"leaf": 0.05781106654558077}, {"f": 5, "t": 0.5, "l": 9, "r": 12}, {"f": 15, "t": 3.6055208444595337, "l": 10, "r": 11}, {"leaf": 0.03654557742396412}, {"leaf": -0.05072557074654785}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.028117426071316856}, {"leaf": 0.05356419961395927}], [{"f": 0, "t": 12.5, "l": 1, "r": 8}, {"f": 12, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.010551871353085732}, {"leaf": 0.047399772199532564}, {"f": 2, "t": 6.5, "l": 6, "r": 7}, {"leaf": -0.016109300234665423}, {"leaf": 0.08505173043170461}, {"f": 15, "t": 2.645730495452881, "l": 9, "r": 12}, {"f": 10, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.00741534941499538}, {"leaf": 0.10034127250886316}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.18562168616904207}, {"leaf": -0.007545093112392473}], [{"f": 2, "t": 6.5, "l": 1, "r": 8}, {"f": 1, "t": 3.5, "l": 2, "r": 5}, {"f": 19, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.5202216735326398}, {"leaf": -0.26363827576200927}, {"f": 11, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.13152563701966888}, {"leaf": -0.04370331391110098}, {"f": 5, "t": 0.5, "l": 9, "r": 12}, {"f": 6, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.04185211610931689}, {"leaf": -0.012385189722562365}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.04178977019193186}, {"leaf": 0.059407224042414226}], [{"f": 0, "t": 7.5, "l": 1, "r": 8}, {"f": 16, "t": 5.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.13301404925186966}, {"leaf": -0.02870727856861654}, {"f": 17, "t": 2.5, "l": 6, "r": 7}, {"leaf": 0.11125943146823224}, {"leaf": -0.012085178841932491}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.01298191361200217}, {"leaf": 0.023871998519707522}, {"f": 7, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.07841729441420674}, {"leaf": -0.02160315880953733}], [{"f": 0, "t": 12.5, "l": 1, "r": 8}, {"f": 5, "t": 0.5, "l": 2, "r": 5}, {"f": 15, "t": 3.6055208444595337, "l": 3, "r": 4}, {"leaf": 0.01990461537078471}, {"leaf": -0.058597400069233745}, {"f": 6, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.038613349845804175}, {"leaf": 0.04233652396285546}, {"f": 17, "t": 5.5, "l": 9, "r": 12}, {"f": 3, "t": 2.5, "l": 10, "r": 11}, {"leaf": 0.02894086352267885}, {"leaf": 0.2246357939739052}, {"f": 15, "t": 2.645730495452881, "l": 13, "r": 14}, {"leaf": 0.023792239127385876}, {"leaf": 0.10510085859156698}], [{"f": 8, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 9.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.07734935054853992}, {"leaf": -0.013424129983476269}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.21372766274901517}, {"leaf": 0.0476729944487481}, {"f": 18, "t": 0.5, "l": 9, "r": 12}, {"f": 19, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.0379424782298627}, {"leaf": -0.01073388198109927}, {"f": 16, "t": 9.5, "l": 13, "r": 14}, {"leaf": -0.013478820716322254}, {"leaf": -0.06915347272704553}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 1.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.2729764711469378}, {"leaf": -0.030996312822943326}, {"f": 16, "t": 12.5, "l": 6, "r": 7}, {"leaf": -0.00018985268309740187}, {"leaf": 0.08562468719199905}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.016484638899567337}, {"leaf": 0.11486632875310804}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.07005023910100691}, {"leaf": 0.2549907877673706}], [{"f": 16, "t": 1.5, "l": 1, "r": 8}, {"f": 5, "t": 0.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.05944879850787359}, {"leaf": 0.10633419348336627}, {"f": 10, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.16452368606891904}, {"leaf": -0.306515043702779}, {"f": 3, "t": 2.5, "l": 9, "r": 12}, {"f": 10, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.015917719909652742}, {"leaf": 0.05522208127242521}, {"f": 15, "t": 2.3228381872177124, "l": 13, "r": 14}, {"leaf": 0.03377435051981112}, {"leaf": 0.0027104411034200642}], [{"f": 12, "t": 0.5, "l": 1, "r": 8}, {"f": 15, "t": 2.3228381872177124, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.12453711991616168}, {"leaf": 0.021344002710721677}, {"f": 16, "t": 9.5, "l": 6, "r": 7}, {"leaf": -0.020523832499696994}, {"leaf": 0.026052267349476965}, {"f": 2, "t": 8.5, "l": 9, "r": 12}, {"f": 16, "t": 2.5, "l": 10, "r": 11}, {"leaf": -0.05735894020673838}, {"leaf": 0.0710658896945845}, {"f": 17, "t": 1.5, "l": 13, "r": 14}, {"leaf": 0.9484817889721883}, {"leaf": 0.11175084394840598}], [{"f": 16, "t": 12.5, "l": 1, "r": 8}, {"f": 15, "t": 2.3228381872177124, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.11562759015337619}, {"leaf": 0.014475596006190788}, {"f": 15, "t": 2.645730495452881, "l": 6, "r": 7}, {"leaf": -0.029199994627409874}, {"leaf": 0.0029627800025136897}, {"f": 17, "t": 8.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.08231610040741176}, {"leaf": 0.18850662705305812}, {"f": 15, "t": 1.4999780058860779, "l": 13, "r": 14}, {"leaf": -0.1650051908431432}, {"leaf": 0.16007872322178981}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 1.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.262134528929518}, {"leaf": -0.02624651827302646}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.07149749032238933}, {"leaf": 0.0004459997539341818}, {"f": 1, "t": 8.5, "l": 9, "r": 12}, {"f": 7, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.05130620431562576}, {"leaf": -0.05274372503309895}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.13827654631361674}, {"leaf": 0.0050182239401591845}], [{"f": 12, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 10.5, "l": 2, "r": 5}, {"f": 3, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.02544211601413525}, {"leaf": 0.008388989496951348}, {"f": 17, "t": 8.5, "l": 6, "r": 7}, {"leaf": 0.0354148196179412}, {"leaf": -0.07110952179474611}, {"f": 18, "t": 0.5, "l": 9, "r": 12}, {"f": 15, "t": 3.6055208444595337, "l": 10, "r": 11}, {"leaf": 0.11800023601850436}, {"leaf": 0.01896456895782205}, {"f": 10, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.02526101001169807}, {"leaf": -0.22510999371381765}], [{"f": 15, "t": 2.3228381872177124, "l": 1, "r": 8}, {"f": 6, "t": 0.5, "l": 2, "r": 5}, {"f": 21, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.011675951794632877}, {"leaf": 0.038962448570323376}, {"f": 5, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.0026810038853190507}, {"leaf": 0.09573906086014146}, {"f": 5, "t": 0.5, "l": 9, "r": 12}, {"f": 6, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.025705033713510916}, {"leaf": -0.02392955374333379}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.04877319445336092}, {"leaf": 0.014759882667658788}], [{"f": 2, "t": 4.5, "l": 1, "r": 8}, {"f": 6, "t": 0.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.3045628890072548}, {"leaf": 0.03452209632011407}, {"f": 17, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.4031698497939675}, {"leaf": 0.20951740422330467}, {"f": 12, "t": 0.5, "l": 9, "r": 12}, {"f": 2, "t": 9.5, "l": 10, "r": 11}, {"leaf": -0.014361448041036383}, {"leaf": 0.009560306906708121}, {"f": 0, "t": 8.5, "l": 13, "r": 14}, {"leaf": 0.038465336187524235}, {"leaf": 0.10126181299462217}], [{"f": 8, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 5.5, "l": 2, "r": 5}, {"f": 7, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.013955705245321973}, {"leaf": -0.11013405481212296}, {"f": 3, "t": 2.5, "l": 6, "r": 7}, {"leaf": -0.020238277160505847}, {"leaf": 0.047377627333089554}, {"f": 5, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.03738862110432261}, {"leaf": -0.014800977332698587}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.022663296107939733}, {"leaf": 0.04033291108150722}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 3, "t": 1.5, "l": 2, "r": 5}, {"f": 6, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.07476549520678388}, {"leaf": -0.42585435670411576}, {"f": 16, "t": 7.5, "l": 6, "r": 7}, {"leaf": -0.011835027764552237}, {"leaf": 0.013158213312121707}, {"f": 1, "t": 8.5, "l": 9, "r": 12}, {"f": 21, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.0010815521146668968}, {"leaf": 0.09904066248533672}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.08045368053212132}, {"leaf": 0.24313145581843756}], [{"f": 16, "t": 11.5, "l": 1, "r": 8}, {"f": 12, "t": 0.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.0092657677258961}, {"leaf": 0.036397598279382944}, {"f": 6, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.03330188511305861}, {"leaf": 0.11382237153447669}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 17, "t": 3.5, "l": 10, "r": 11}, {"leaf": 2.4206957518301286}, {"leaf": -0.12122008549482799}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.054774940681595}, {"leaf": -0.00618338496651643}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 4, "t": 2.5, "l": 2, "r": 5}, {"f": 16, "t": 6.5, "l": 3, "r": 4}, {"leaf": -0.0840300802896506}, {"leaf": 0.047283542450546716}, {"f": 8, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.012777470565577735}, {"leaf": 0.013300535134437755}, {"f": 15, "t": 3.6055208444595337, "l": 9, "r": 12}, {"f": 3, "t": 1.5, "l": 10, "r": 11}, {"leaf": 0.20682934366892658}, {"leaf": 0.051543900540351184}, {"f": 16, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.14527784178576847}, {"leaf": -0.028410977592591095}], [{"f": 9, "t": 0.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 18, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.10108820559796422}, {"leaf": 0.10554534704004245}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": 0.06420628775926239}, {"leaf": -0.0032171640759277556}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.02203799099536345}, {"leaf": 0.03477783619335283}, {"f": 16, "t": 10.5, "l": 13, "r": 14}, {"leaf": 0.04451331656707208}, {"leaf": 0.16587523733117798}], [{"f": 9, "t": 0.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 21, "t": 0.5, "l": 3, "r": 4}, {"leaf": 0.00516773889109026}, {"leaf": -0.1879721438654515}, {"f": 15, "t": 3.6055208444595337, "l": 6, "r": 7}, {"leaf": 0.005238826853659666}, {"leaf": -0.06202263100065753}, {"f": 18, "t": 0.5, "l": 9, "r": 12}, {"f": 19, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.041767263524354094}, {"leaf": -0.009863397046834449}, {"f": 16, "t": 6.5, "l": 13, "r": 14}, {"leaf": 0.007783175928138064}, {"leaf": -0.05152602754013447}], [{"f": 8, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 9.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.07405885238730579}, {"leaf": -0.009473736155372425}, {"f": 3, "t": 2.5, "l": 6, "r": 7}, {"leaf": 0.009854745107377818}, {"leaf": 0.09051141237935549}, {"f": 18, "t": 0.5, "l": 9, "r": 12}, {"f": 19, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.030539872386891428}, {"leaf": -0.009191040596490207}, {"f": 16, "t": 9.5, "l": 13, "r": 14}, {"leaf": -0.010716786352258489}, {"leaf": -0.06416551370089903}], [{"f": 0, "t": 7.5, "l": 1, "r": 8}, {"f": 16, "t": 5.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.09678812463274725}, {"leaf": 0.011269731729973783}, {"f": 10, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.039794594739595984}, {"leaf": -0.11093290560662007}, {"f": 14, "t": 0.5, "l": 9, "r": 12}, {"f": 12, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.0007318977379391599}, {"leaf": 0.07080175679706102}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.039735671573191286}, {"leaf": 0.18926586426234657}], [{"f": 2, "t": 12.5, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.08857143574299894}, {"leaf": 0.0018400773441008577}, {"f": 2, "t": 8.5, "l": 6, "r": 7}, {"leaf": 0.010209566094888137}, {"leaf": 0.06980340710231953}, {"f": 17, "t": 3.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": 2.1584143344326536}, {"leaf": 4.035190358453447}, {"f": 10, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.02333504708914525}, {"leaf": 0.08721418100405706}], [{"f": 0, "t": 12.5, "l": 1, "r": 8}, {"f": 12, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.03216030513177634}, {"leaf": 0.0009681780924288608}, {"f": 2, "t": 8.5, "l": 6, "r": 7}, {"leaf": 0.03138137457368796}, {"leaf": 0.088703191845041}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.05097553107694798}, {"leaf": -0.07538379903074915}, {"f": 3, "t": 2.5, "l": 13, "r": 14}, {"leaf": 0.24201355299741478}, {"leaf": 0.06637144206851187}], [{"f": 15, "t": 3.6055208444595337, "l": 1, "r": 8}, {"f": 11, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.06247876525552037}, {"leaf": 0.0032011843183473686}, {"f": 7, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.06344408737631217}, {"leaf": -0.004235294554872078}, {"f": 16, "t": 8.5, "l": 9, "r": 12}, {"f": 17, "t": 3.5, "l": 10, "r": 11}, {"leaf": -0.04047728867984806}, {"leaf": -0.09430296210428366}, {"f": 3, "t": 1.5, "l": 13, "r": 14}, {"leaf": -0.18238031912564429}, {"leaf": 0.10629331847325374}], [{"f": 2, "t": 4.5, "l": 1, "r": 8}, {"f": 10, "t": 0.5, "l": 2, "r": 5}, {"f": 15, "t": 4.358865976333618, "l": 3, "r": 4}, {"leaf": -0.311495682205807}, {"leaf": -0.047335585784108944}, {"f": 17, "t": 0.5, "l": 6, "r": 7}, {"leaf": 2.005629054813092}, {"leaf": 0.07942449794768634}, {"f": 14, "t": 0.5, "l": 9, "r": 12}, {"f": 15, "t": 2.3228381872177124, "l": 10, "r": 11}, {"leaf": 0.011859228213772879}, {"leaf": -0.009404251481853016}, {"f": 16, "t": 4.5, "l": 13, "r": 14}, {"leaf": 0.1026548883409598}, {"leaf": 0.00676170805688774}], [{"f": 12, "t": 0.5, "l": 1, "r": 8}, {"f": 3, "t": 2.5, "l": 2, "r": 5}, {"f": 10, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.024348847330563857}, {"leaf": 0.049663396258458246}, {"f": 16, "t": 9.5, "l": 6, "r": 7}, {"leaf": 0.011902093402830148}, {"leaf": -0.033326313403461545}, {"f": 15, "t": 3.605475068092346, "l": 9, "r": 12}, {"f": 5, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.15735494636552905}, {"leaf": -0.03895834626078636}, {"f": 2, "t": 7.5, "l": 13, "r": 14}, {"leaf": -0.01380370971623056}, {"leaf": 0.05968565659608737}], [{"f": 16, "t": 10.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.059227160424892}, {"leaf": -0.0015696826845184512}, {"f": 0, "t": 10.5, "l": 6, "r": 7}, {"leaf": -0.00539460883486813}, {"leaf": 0.025618019418158434}, {"f": 17, "t": 8.5, "l": 9, "r": 12}, {"f": 3, "t": 2.5, "l": 10, "r": 11}, {"leaf": 0.05814140454494386}, {"leaf": -0.0010618477754980244}, {"f": 15, "t": 1.9999780058860779, "l": 13, "r": 14}, {"leaf": -0.08786092423161723}, {"leaf": 0.13217453064625395}], [{"f": 17, "t": 2.5, "l": 1, "r": 8}, {"f": 1, "t": 6.5, "l": 2, "r": 5}, {"f": 5, "t": 0.5, "l": 3, "r": 4}, {"leaf": 0.002445096988688556}, {"leaf": -0.19059307648215712}, {"f": 15, "t": 3.6055208444595337, "l": 6, "r": 7}, {"leaf": 0.1376166009119443}, {"leaf": -0.01257177633181128}, {"f": 15, "t": 2.3228381872177124, "l": 9, "r": 12}, {"f": 17, "t": 8.5, "l": 10, "r": 11}, {"leaf": 0.019020073232350526}, {"leaf": -0.02791025940509957}, {"f": 15, "t": 2.645697236061096, "l": 13, "r": 14}, {"leaf": -0.035933831237182495}, {"leaf": 0.00012927402796790495}], [{"f": 15, "t": 3.6055208444595337, "l": 1, "r": 8}, {"f": 15, "t": 2.645730495452881, "l": 2, "r": 5}, {"f": 15, "t": 2.3228381872177124, "l": 3, "r": 4}, {"leaf": 0.009766187667142127}, {"leaf": -0.02080980144485473}, {"f": 9, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.0015468077046587323}, {"leaf": 0.0449604871821631}, {"f": 17, "t": 3.5, "l": 9, "r": 12}, {"f": 16, "t": 7.5, "l": 10, "r": 11}, {"leaf": -0.04690727102102132}, {"leaf": 0.05678739006417381}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.1012641835795854}, {"leaf": 0.0026396881678388295}], [{"f": 0, "t": 12.5, "l": 1, "r": 8}, {"f": 0, "t": 4.5, "l": 2, "r": 5}, {"f": 2, "t": 3.5, "l": 3, "r": 4}, {"leaf": -0.40747563805960996}, {"leaf": -0.1385700612439288}, {"f": 17, "t": 2.5, "l": 6, "r": 7}, {"leaf": 0.04542577350131708}, {"leaf": -0.0036143027065300617}, {"f": 15, "t": 2.645730495452881, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.0429474288866555}, {"leaf": -0.03851749007609976}, {"f": 3, "t": 2.5, "l": 13, "r": 14}, {"leaf": 0.013178346148533868}, {"leaf": 0.15647301157648574}], [{"f": 9, "t": 0.5, "l": 1, "r": 8}, {"f": 6, "t": 0.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.1397001944702709}, {"leaf": -0.010165230527593229}, {"f": 5, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.02409101270340813}, {"leaf": 0.04460771468919877}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.02268607604162814}, {"leaf": 0.031103481599308282}, {"f": 16, "t": 10.5, "l": 13, "r": 14}, {"leaf": 0.03127930538053516}, {"leaf": 0.14212202496329823}], [{"f": 16, "t": 8.5, "l": 1, "r": 8}, {"f": 5, "t": 0.5, "l": 2, "r": 5}, {"f": 6, "t": 0.5, "l": 3, "r": 4}, {"leaf": 0.030783333291450388}, {"leaf": -0.0266380828534592}, {"f": 6, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.04581413170100071}, {"leaf": 0.04153561189991659}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 5, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.0319175627857343}, {"leaf": -0.3482093783866869}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.02765608061582289}, {"leaf": -0.01570666164827424}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 1.5, "l": 2, "r": 5}, {"f": 5, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.010062672447191931}, {"leaf": -0.16431482695863833}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": -0.05164038930007305}, {"leaf": 0.0036931938272065697}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.016705064708307186}, {"leaf": 0.08959708604894724}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.047582786644731485}, {"leaf": 0.2021170055619517}], [{"f": 17, "t": 3.5, "l": 1, "r": 8}, {"f": 16, "t": 6.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.03581905493991458}, {"leaf": 0.0644090162762268}, {"f": 0, "t": 12.5, "l": 6, "r": 7}, {"leaf": 0.07036651777764522}, {"leaf": 2.3470309975631247}, {"f": 2, "t": 11.5, "l": 9, "r": 12}, {"f": 15, "t": 2.3228381872177124, "l": 10, "r": 11}, {"leaf": 0.0015564792863211557}, {"leaf": -0.022699695282997378}, {"f": 16, "t": 6.0, "l": 13, "r": 14}, {"leaf": 0.05605309437327834}, {"leaf": -0.0011142049517265536}], [{"f": 16, "t": 11.5, "l": 1, "r": 8}, {"f": 15, "t": 1.4999780058860779, "l": 2, "r": 5}, {"f": 16, "t": 7.5, "l": 3, "r": 4}, {"leaf": 0.03423918719180187}, {"leaf": -0.014587649898389322}, {"f": 15, "t": 2.645730495452881, "l": 6, "r": 7}, {"leaf": -0.017172422762161074}, {"leaf": 0.0007131807106428591}, {"f": 15, "t": 0.9999890029430389, "l": 9, "r": 12}, {"f": 5, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.13475034561311947}, {"leaf": 0.00023737579837534233}, {"f": 5, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.08544063975633225}, {"leaf": 0.006484248112158941}], [{"f": 17, "t": 8.5, "l": 1, "r": 8}, {"f": 16, "t": 8.5, "l": 2, "r": 5}, {"f": 3, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.016324515675516963}, {"leaf": 0.009175036120507673}, {"f": 17, "t": 2.5, "l": 6, "r": 7}, {"leaf": 0.21967958584767155}, {"leaf": 0.013680194486880709}, {"f": 16, "t": 6.5, "l": 9, "r": 12}, {"f": 16, "t": 4.5, "l": 10, "r": 11}, {"leaf": -0.019150365020145246}, {"leaf": 0.06778155295010894}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.04407727719693719}, {"leaf": -0.11621754948666631}], [{"f": 12, "t": 0.5, "l": 1, "r": 8}, {"f": 1, "t": 5.5, "l": 2, "r": 5}, {"f": 14, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.1771953249132624}, {"leaf": -0.013160477908815367}, {"f": 14, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.0025421643680993834}, {"leaf": 0.03357857023135831}, {"f": 6, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.04573767603304561}, {"leaf": -0.0367798523452246}, {"f": 3, "t": 1.5, "l": 13, "r": 14}, {"leaf": -0.3142303164262269}, {"leaf": 0.12196955926697918}], [{"f": 16, "t": 10.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 9, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.05325934669983775}, {"leaf": 0.00029999611886600365}, {"f": 0, "t": 11.5, "l": 6, "r": 7}, {"leaf": 0.0022750719556256832}, {"leaf": 0.03236480979630886}, {"f": 17, "t": 8.5, "l": 9, "r": 12}, {"f": 3, "t": 2.5, "l": 10, "r": 11}, {"leaf": 0.05478355859871492}, {"leaf": -0.006084722639589076}, {"f": 8, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.0036331821212645674}, {"leaf": -0.11717764414770725}], [{"f": 8, "t": 0.5, "l": 1, "r": 8}, {"f": 3, "t": 2.5, "l": 2, "r": 5}, {"f": 11, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.048488239204476064}, {"leaf": 0.022136467110628357}, {"f": 16, "t": 9.5, "l": 6, "r": 7}, {"leaf": 0.001300212184701727}, {"leaf": 0.08943037552882284}, {"f": 5, "t": 0.5, "l": 9, "r": 12}, {"f": 2, "t": 10.5, "l": 10, "r": 11}, {"leaf": 0.007404309094226477}, {"leaf": 0.03895327304043058}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.0021981246652747846}, {"leaf": -0.04036446442078017}], [{"f": 0, "t": 7.5, "l": 1, "r": 8}, {"f": 10, "t": 0.5, "l": 2, "r": 5}, {"f": 21, "t": 0.5, "l": 3, "r": 4}, {"leaf": 0.009077276791668943}, {"leaf": -0.0748923260308292}, {"f": 17, "t": 3.5, "l": 6, "r": 7}, {"leaf": -0.03609021517206445}, {"leaf": -0.1710477682560767}, {"f": 17, "t": 2.5, "l": 9, "r": 12}, {"f": 16, "t": 5.5, "l": 10, "r": 11}, {"leaf": 0.05964707265292126}, {"leaf": 0.11989875056699774}, {"f": 17, "t": 8.5, "l": 13, "r": 14}, {"leaf": 0.002863726433868893}, {"leaf": -0.029082553430106694}], [{"f": 7, "t": 0.5, "l": 1, "r": 8}, {"f": 21, "t": 0.5, "l": 2, "r": 5}, {"f": 20, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.027208540717589574}, {"leaf": 0.03340261230718428}, {"f": 5, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.08671314432020107}, {"leaf": 0.020051057039770056}, {"f": 21, "t": 0.5, "l": 9, "r": 12}, {"f": 20, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.026041203372825134}, {"leaf": -0.022562655391647923}, {"f": 9, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.0847408929062717}, {"leaf": 0.0034238642910898254}], [{"f": 12, "t": 0.5, "l": 1, "r": 8}, {"f": 0, "t": 5.5, "l": 2, "r": 5}, {"f": 15, "t": 4.179386377334595, "l": 3, "r": 4}, {"leaf": -0.13889489275773875}, {"leaf": -0.039915135636881725}, {"f": 15, "t": 2.3228381872177124, "l": 6, "r": 7}, {"leaf": 0.007601090439557775}, {"leaf": -0.006638567545592296}, {"f": 6, "t": 0.5, "l": 9, "r": 12}, {"f": 9, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.01652948913300205}, {"leaf": 0.06351909738453922}, {"f": 3, "t": 1.5, "l": 13, "r": 14}, {"leaf": -0.24168644608986323}, {"leaf": 0.10792314637891057}], [{"f": 1, "t": 11.5, "l": 1, "r": 8}, {"f": 17, "t": 3.5, "l": 2, "r": 5}, {"f": 16, "t": 6.5, "l": 3, "r": 4}, {"leaf": -0.006265204855108034}, {"leaf": 0.05274308705765969}, {"f": 15, "t": 2.3228381872177124, "l": 6, "r": 7}, {"leaf": 0.004252770381270179}, {"leaf": -0.017107592798838195}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.018832488583331756}, {"leaf": -0.08276622207593529}, {"f": 3, "t": 2.5, "l": 13, "r": 14}, {"leaf": 0.13645979048975368}, {"leaf": 0.029474171792774867}], [{"f": 2, "t": 4.5, "l": 1, "r": 8}, {"f": 0, "t": 2.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.7948799464081523}, {"leaf": -1.0838765679553584}, {"f": 6, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.22078680604392206}, {"leaf": 0.09521621049353206}, {"f": 15, "t": 2.645730495452881, "l": 9, "r": 12}, {"f": 4, "t": 2.5, "l": 10, "r": 11}, {"leaf": -0.09581242748136183}, {"leaf": -0.0015492296359263008}, {"f": 16, "t": 10.5, "l": 13, "r": 14}, {"leaf": 0.012286299551379156}, {"leaf": 0.06229719164004218}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 1.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.22420804600387584}, {"leaf": -0.012708539014552468}, {"f": 17, "t": 2.5, "l": 6, "r": 7}, {"leaf": 0.0595450314406629}, {"leaf": -0.002363665320984434}, {"f": 3, "t": 1.5, "l": 9, "r": 12}, {"f": 8, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.0015993133336495524}, {"leaf": 0.30582327536631265}, {"f": 19, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.026190199806457214}, {"leaf": -0.0512802153372599}], [{"f": 15, "t": 3.6055208444595337, "l": 1, "r": 8}, {"f": 17, "t": 2.5, "l": 2, "r": 5}, {"f": 16, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.06604118995366352}, {"leaf": 0.09759245456919122}, {"f": 2, "t": 11.5, "l": 6, "r": 7}, {"leaf": -0.0035274838109364865}, {"leaf": 0.011948006629550633}, {"f": 20, "t": 0.5, "l": 9, "r": 12}, {"f": 11, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.11047273686802193}, {"leaf": 0.0034338885820217988}, {"f": 2, "t": 8.5, "l": 13, "r": 14}, {"leaf": -0.11522495129724511}, {"leaf": 0.03988906422012587}], [{"f": 15, "t": 3.6055208444595337, "l": 1, "r": 8}, {"f": 14, "t": 0.5, "l": 2, "r": 5}, {"f": 4, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.022110297069640284}, {"leaf": 0.0036134246014947326}, {"f": 3, "t": 1.5, "l": 6, "r": 7}, {"leaf": 0.22195140612722278}, {"leaf": 0.024531307636723412}, {"f": 2, "t": 3.5, "l": 9, "r": 12}, {"f": 12, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.4755978141616354}, {"leaf": -0.1929671251286516}, {"f": 11, "t": 0.5, "l": 13, "r": 14}, {"leaf": -0.08117612308941345}, {"leaf": -0.00979722458076198}], [{"f": 2, "t": 12.5, "l": 1, "r": 8}, {"f": 15, "t": 2.645697236061096, "l": 2, "r": 5}, {"f": 15, "t": 2.3228381872177124, "l": 3, "r": 4}, {"leaf": 0.006238413190941229}, {"leaf": -0.03975171504719009}, {"f": 16, "t": 9.5, "l": 6, "r": 7}, {"leaf": 0.0012846144848592644}, {"leaf": 0.03871847248362613}, {"f": 10, "t": 0.5, "l": 9, "r": 12}, {"f": 18, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.03288609620396807}, {"leaf": -0.07802109364919702}, {"f": 6, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.117565717604528}, {"leaf": 0.0046337782574002616}], [{"f": 16, "t": 7.5, "l": 1, "r": 8}, {"f": 15, "t": 1.4999780058860779, "l": 2, "r": 5}, {"f": 20, "t": 0.5, "l": 3, "r": 4}, {"leaf": 0.04165088031612664}, {"leaf": -0.015524701533898299}, {"f": 5, "t": 0.5, "l": 6, "r": 7}, {"leaf": -0.00039509502693669293}, {"leaf": -0.035003334357336484}, {"f": 19, "t": 0.5, "l": 9, "r": 12}, {"f": 15, "t": 2.645730495452881, "l": 10, "r": 11}, {"leaf": 0.004044316914544313}, {"leaf": 0.04212625271821751}, {"f": 17, "t": 7.5, "l": 13, "r": 14}, {"leaf": -0.011165278600369782}, {"leaf": -0.0703093745877776}], [{"f": 1, "t": 7.5, "l": 1, "r": 8}, {"f": 19, "t": 0.5, "l": 2, "r": 5}, {"f": 16, "t": 3.5, "l": 3, "r": 4}, {"leaf": -0.09257338017647267}, {"leaf": -0.015089553262834586}, {"f": 15, "t": 3.605475068092346, "l": 6, "r": 7}, {"leaf": 0.07914123151892394}, {"leaf": -0.010781025502188287}, {"f": 14, "t": 0.5, "l": 9, "r": 12}, {"f": 3, "t": 1.5, "l": 10, "r": 11}, {"leaf": -0.06547588461652908}, {"leaf": 0.0020403302658835087}, {"f": 21, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.022826390878434227}, {"leaf": 0.15655645157191053}], [{"f": 16, "t": 11.5, "l": 1, "r": 8}, {"f": 8, "t": 0.5, "l": 2, "r": 5}, {"f": 3, "t": 2.5, "l": 3, "r": 4}, {"leaf": -0.02877791912245442}, {"leaf": 0.012374176495188564}, {"f": 16, "t": 9.5, "l": 6, "r": 7}, {"leaf": 0.00874574995925887}, {"leaf": -0.029654575559804025}, {"f": 15, "t": 1.4999780058860779, "l": 9, "r": 12}, {"f": 5, "t": 0.5, "l": 10, "r": 11}, {"leaf": -0.07440280838728398}, {"leaf": 0.03902582018106274}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.028002905992609267}, {"leaf": 0.08374254827691131}], [{"f": 14, "t": 0.5, "l": 1, "r": 8}, {"f": 16, "t": 4.5, "l": 2, "r": 5}, {"f": 15, "t": 2.3228381872177124, "l": 3, "r": 4}, {"leaf": 0.013515276106699317}, {"leaf": -0.039132230453812755}, {"f": 17, "t": 3.5, "l": 6, "r": 7}, {"leaf": 0.04058899094800883}, {"leaf": -0.000962807009101731}, {"f": 0, "t": 8.5, "l": 9, "r": 12}, {"f": 3, "t": 1.5, "l": 10, "r": 11}, {"leaf": 0.12127234119647046}, {"leaf": -0.01555973032780794}, {"f": 20, "t": 0.5, "l": 13, "r": 14}, {"leaf": 0.05073720797680898}, {"leaf": 0.16444412354114804}], [{"f": 9, "t": 0.5, "l": 1, "r": 8}, {"f": 18, "t": 0.5, "l": 2, "r": 5}, {"f": 8, "t": 0.5, "l": 3, "r": 4}, {"leaf": -0.08850164192907482}, {"leaf": 0.0030279375247516285}, {"f": 8, "t": 0.5, "l": 6, "r": 7}, {"leaf": 0.10717313647571346}, {"leaf": -0.010163455189208984}, {"f": 18, "t": 0.5, "l": 9, "r": 12}, {"f": 19, "t": 0.5, "l": 10, "r": 11}, {"leaf": 0.03200924326548042}, {"leaf": -0.009605187202166953}, {"f": 16, "t": 6.5, "l": 13, "r": 14}, {"leaf": 0.0072534467873471885}, {"leaf": -0.05742868261929564}]], "learning_rate": 0.08, "init_": 0.25, "n_trees": 150, "auc": 0.6587165145833334, "trained_on": "selfplay-100000games-gbm", "base_score": -1.0986122886681098};
-let USE_GBM=false;   // [2026-08-19] USE_GBM=true だと vertexModelScore が gbmPredict で return し、
-                     //  線形の WINMODEL が死にコードになっていた。しかも線形の方が強い。
-                     //  実測 +5.8pt(SEED=71) / +6.8pt(SEED=101)（40盤面・各6000試合・対照つき）
-const ROBBER_MODEL={"feature_names": ["pip", "maxVpTouched", "sumWeightedPip", "selfTouched", "numOwners", "diceCount", "is_ore", "is_wheat", "is_sheep", "is_wood", "is_brick"], "mean": [3.9588766883684774, 4.604353318433582, 10.628581608525248, 0.07820425614614712, 1.7736533540634212, 44.962141677193664, 0.30641013183040194, 0.39724678521685614, 0.10144786706831212, 0.10288601690797784, 0.0791954134680789], "scale": [1.163394402844868, 2.409477011293381, 6.266551935784059, 0.26849273820093317, 0.7867552923698771, 25.33105352918398, 0.46100212899972043, 0.48932788276539185, 0.3019208461424599, 0.30380994788286375, 0.2700435149261598], "coef": [0.11951118221174424, -0.5562694803798628, -0.15672487677173366, -0.055394932983823926, 0.20306044716106517, 0.48439133193067957, 0.16193125883205328, 0.21195243937940772, 0.09540894632488735, 0.11428222499031938, 0.09895558184365694], "intercept": -0.8916678856737725, "auc": 0.6035114826851945, "n_events": 181606};
-let USE_ROBBER_MODEL=false;   // 検証済み: AUC0.6035は確認したが実戦(4000試合)では24.35%と中立〜微減。デフォルトOFF。
 let USE_THREAT=true;   // 盗賊の標的を「表面VP」ではなく「脅威度」で選ぶ（生産力・騎士賞見込み点を加味）
 // 検証: カード多用の人間型ボット相手に、相手の勝率を23.8%→21.5% / 22.5%→21.9% に抑制（計5000試合で一貫）
 // 脅威度の重み（すべて公開情報のみ）
@@ -2960,26 +2632,9 @@ function vertexModelScore(vid, p){
     center_dist, complement_score, backup_count,
     seat_1:seat===1?1:0, seat_2:seat===2?1:0, seat_3:seat===3?1:0, seat_4:seat===4?1:0
   };
-  if(typeof USE_GBM!=="undefined" && USE_GBM && typeof GBM_MODEL!=="undefined"){
-    const xArr=GBM_MODEL.feature_names.map(nm=>feat[nm]||0);
-    return gbmPredict(xArr);
-  }
   let z=WINMODEL.intercept;
   WINMODEL.feature_names.forEach((nm,i)=>{ const x=((feat[nm]||0)-WINMODEL.mean[i])/WINMODEL.scale[i]; z+=WINMODEL.coef[i]*x; });
   return 1/(1+Math.exp(-z));   // 勝率(0〜1)
-}
-// 勾配ブースティング(決定木の集合)の推論: 各木を根から辿って葉の値を合計し、シグモイドで確率化
-function gbmPredict(xArr){
-  let z=GBM_MODEL.base_score;
-  for(const tree of GBM_MODEL.trees){
-    let idx=0;
-    while(tree[idx].leaf===undefined){
-      const node=tree[idx];
-      idx = (xArr[node.f]<=node.t) ? node.l : node.r;
-    }
-    z += GBM_MODEL.learning_rate * tree[idx].leaf;
-  }
-  return 1/(1+Math.exp(-z));
 }
 function pipOf(n){ if(n==null||n===7) return 0; return 6-Math.abs(7-n); }
 // ===== 戦略の重み（プレイヤー方針の数値化。実データで答え合わせ・調整する前提） =====
@@ -3103,17 +2758,17 @@ function _lookaheadETADiff(sp, v){
 //  盤面ハイライトも評価タブも旧評価を表示していた。ここを最強AIの目線に揃える。
 let EVAL_STRONG = true;   // false にすると従来どおり（素のcomputeBest）
 function computeBestStrong(seat){
-  if(!EVAL_STRONG || seat==null) return computeBest();
+  if(!EVAL_STRONG || seat==null) return computeBest(undefined, seat);
   const s={EW:ETA_W,ES:ETA_SEATS,SW:SCARCE_W,SS:SCARCE_SEATS,LW:LOOK_W,LS:LOOK_SEATS};
   try{
     const one=new Set([seat]);
     ETA_W=0.02; ETA_SEATS=one; SCARCE_W=15; SCARCE_SEATS=one; LOOK_W=0.01; LOOK_SEATS=one;
-    return computeBest();
-  }catch(e){ return computeBest(); }
+    return computeBest(undefined, seat);
+  }catch(e){ return computeBest(undefined, seat); }
   finally{ ETA_W=s.EW; ETA_SEATS=s.ES; SCARCE_W=s.SW; SCARCE_SEATS=s.SS; LOOK_W=s.LW; LOOK_SEATS=s.LS; }
 }
 
-function computeBest(resFactorOverride){
+function computeBest(resFactorOverride, seatOverride){
   const RF = resFactorOverride || (SCORE_RF || BEST_W.resFactor);
   // 現在配置中の席が既に触れている資源（2軒目の多様性を「新規分だけ」で測るため）
   let _ownedRes=null;
@@ -3160,7 +2815,9 @@ function computeBest(resFactorOverride){
       const _setupSeat = (typeof game!=="undefined" && game && game.setup) ? game.setup.queue[game.setup.step] : null;
       const _activeP = (typeof sim!=="undefined" && sim) ? sim.order[sim.step]
                      : (_setupSeat!=null ? _setupSeat
-                     : ((typeof active!=="undefined" && active) ? active : ((typeof game!=="undefined" && game && game.order) ? cur() : 1)));
+                     : (seatOverride!=null ? seatOverride
+                     : ((typeof active!=="undefined" && active) ? active
+                     : ((typeof game!=="undefined" && game && game.order) ? cur() : 1))));
       sc = sc*(1-MODEL_BLEND) + vertexModelScore(vtx.id, _activeP)*100*MODEL_BLEND; }   // 合成比 MODEL_BLEND（既定0.75=静的25%+モデル75%。調整バーで可変）
     // 2軒目の多様性補正（ユーザー指摘）: 1軒目で持っていない「新規資源」をモデルブレンドの後に加点する。
     // 1軒目羊麦木→2軒目も羊麦木なら新規ゼロで加点なし。鉄など未所持資源を持つ頂点は正しく浮上する。
@@ -3302,6 +2959,20 @@ function _oreStackBonus(sp, v){
 let ROAD_PATH_SEATS = null, ROAD_PATH_DISC = 0.5, ROAD_PATH_DEPTH = 3;
 let ROAD_ETA_W = 0, ROAD_SCARCE_W = 0;
 let ROAD_PORT_W = 0, ROAD_PORT3 = 3, ROAD_PORT2 = 12;
+function _setupIntentBonus(p,v){
+  try{
+    const intents=game&&game.setupPairIntents,intent=intents&&intents[p];if(!intent||intent.kind!=="port"||intent.target!==v)return 0;
+    const oc=occupantOf(v);if(oc){delete intents[p];return 0;}
+    let actual=null;for(const eid in ports){const e=GEO.edges[+eid];if(e&&(e.a===v||e.b===v)){actual=ports[eid];break;}}
+    if(!actual||actual!==intent.type){delete intents[p];return 0;}
+    const before={};for(const r of RES5)before[r]=rateFor(p,r);const after=_spRatesWith(before,actual);
+    if(RES5.every(r=>after[r]===before[r])){delete intents[p];return 0;}
+    // 現在手札と今後4ダイスで、港がある時だけ行動/圧縮できる確率を毎ターン再計算。
+    const liq=_spLiquidity(_prodTableFor(p),before,after,4,game.hands[p]);
+    if(liq.score<0.01)return 0;const age=Math.max(0,(game.rollCount||0)-(intent.createdRoll||0)),decay=Math.max(.25,1-age/24);
+    return Math.min(6,1.5+10*liq.score)*decay;
+  }catch(e){return 0;}
+}
 function _roadPathTarget(p, B){
   try{
     const occ=v=>occupantOf(v);
@@ -3372,6 +3043,9 @@ function _roadPathTarget(p, B){
         }catch(e){}
         sc += ROAD_PORT_W * pv;
       }
+      // 配置時に見つけた港ルートは固定命令にせず、まだ空いていて現在の手札でも
+      // 整数交換・バースト回避価値が残る時だけ、目的地候補へ小さな再評価加点を行う。
+      sc += _setupIntentBonus(p,v);
       const eff = sc * Math.pow(ROAD_PATH_DISC, d-1);
       const eid = first.get(v);
       if(eid==null) continue;
@@ -3382,7 +3056,7 @@ function _roadPathTarget(p, B){
 }
 
 function bestRoadFrom(vid, wantPort, cfgP){
-  const B=computeBest();
+  const B=computeBest(undefined, cfgP);
   const _sp = (game && game.setup) ? game.setup.queue[game.setup.step] : null;
   const _fore = (ROAD_FORESIGHT instanceof Set) ? (_sp!=null && ROAD_FORESIGHT.has(_sp)) : !!ROAD_FORESIGHT;
   const dead = (_fore && game && game.setup) ? _predictOpponentSpots() : null;
@@ -3517,24 +3191,6 @@ function playoutFrom(snap, vid, sp){
   if(_bs!==null) USE_BACKSOLVE=_bs;
   return winner;
 }
-// 現局面の手番席が置くべき最善頂点を、プレイアウト勝率で選ぶ
-// nPlayouts=候補ごとの試行回数, topN=候補数。pip>5で足切り→computeBest上位topN。
-function mctsPlacement(nPlayouts, topN){
-  const sp=game.setup.queue[game.setup.step];
-  const snap=snapshotState();
-  const B=computeBest();
-  const cands=B.ranked.filter(vid=>B.scores[vid].pip>5).slice(0, topN||14);
-  const stats=cands.map(vid=>({vid, wins:0, games:0}));
-  for(const c of stats){
-    for(let i=0;i<nPlayouts;i++){
-      if(playoutFrom(snap, c.vid, sp)===sp) c.wins++;
-      c.games++;
-    }
-  }
-  restoreState(snap);
-  stats.sort((a,b)=> (b.wins/b.games)-(a.wins/a.games));
-  return stats;
-}
 // 非同期版: 候補1つ評価するごとにブラウザへ制御を返し、「応答なし」を防ぐ。
 // onProgress(done,total) で進捗を返す。完了時に stats(勝率降順) を resolve。
 let MCTS_BUSY=false;   // 排他ロック（アドバイス用と対戦AI用の二重起動で盤面が壊れるのを防ぐ）
@@ -3630,6 +3286,91 @@ function _racePure(prodTable, rates, needList, hand, T, capSets){
     P=Q;
   }
   return {cum};
+}
+
+// ===== 初期配置2軒パッケージ評価（安全上書き版） =====
+// 勝ち筋を本編へ固定せず、2軒目を置く瞬間だけ「初期3枚＋近い港までの道＋港後の変換」を評価する。
+// 広い一般化は自己対戦で悪化したため、game37の反実仮想で7-0だった型だけ現行1位を上書きする。
+function _spResPips(v1,v2){
+  const r={wood:0,brick:0,sheep:0,wheat:0,ore:0};
+  for(const v of [v1,v2])for(const hid of (GEO.vertex_hexes[String(v)]||[])){const b=board[hid];if(b&&b.resource&&b.resource!=="desert"&&b.number)r[b.resource]+=pipOf(b.number);}
+  return r;
+}
+function _spStartHand(v2){
+  const h={wood:0,brick:0,sheep:0,wheat:0,ore:0};
+  for(const hid of (GEO.vertex_hexes[String(v2)]||[])){const b=board[hid];if(b&&b.resource&&b.resource!=="desert")h[b.resource]++;}
+  return h;
+}
+function _spProd(v1,v2){
+  const t={};for(const v of [v1,v2])for(const hid of (GEO.vertex_hexes[String(v)]||[])){const b=board[hid];if(!b||!b.number||!b.resource||b.resource==="desert")continue;t[b.number]=t[b.number]||{};t[b.number][b.resource]=(t[b.number][b.resource]||0)+1;}return t;
+}
+function _spRates(v1,v2){
+  const z={wood:4,brick:4,sheep:4,wheat:4,ore:4};for(const [eidS,type]of Object.entries(ports||{})){const e=GEO.edges[Number(eidS)];if(!e||(![v1,v2].includes(e.a)&&![v1,v2].includes(e.b)))continue;if(type==="3:1")for(const r of RES5)z[r]=Math.min(z[r],3);else if(z[type]!=null)z[type]=2;}return z;
+}
+function _spRatesWith(rates,type){const z={...rates};if(type==="3:1")for(const r of RES5)z[r]=Math.min(z[r]||4,3);else if(z[type]!=null)z[type]=Math.min(z[type]||4,2);return z;}
+function _spCanAct(h,rates){
+  return [COST.road,COST.settlement,COST.city,COST.dev].some(cost=>{let def=0,tr=0;for(const r of RES5){const n=h[r]||0,need=cost[r]||0;if(n<need)def+=need-n;else tr+=Math.floor((n-need)/(rates[r]||4));}return tr>=def;});
+}
+function _spCanCompress(h,rates){
+  const total=RES5.reduce((s,r)=>s+(h[r]||0),0);if(total<=7)return true;let reduction=0;for(const r of RES5){const rate=rates[r]||4;reduction+=Math.floor((h[r]||0)/rate)*(rate-1);}return total-reduction<=7;
+}
+// 港の整数閾値プレミアム。単なる4/3倍ではなく「港がある時だけ行動できる」と
+// 「港がある時だけ7枚以下へ圧縮できる」の確率を、次の3相手手番で7が出る確率込みで測る。
+function _spLiquidity(prod,before,after,T,startHand){
+  const cap=9,base=10,enc=a=>a.reduce((s,x)=>s*base+Math.min(cap,x),0),dec=k=>{const a=Array(5);for(let i=4;i>=0;i--){a[i]=k%base;k=Math.floor(k/base);}return a;};
+  const outs=[];let pp=0;for(const d in prod){const g=prod[d],pr=pipOf(Number(d))/36;if(!g||!pr)continue;outs.push({pr,add:RES5.map(r=>g[r]||0)});pp+=pr;}outs.push({pr:Math.max(0,1-pp),add:[0,0,0,0,0]});
+  const initial=RES5.map(r=>(startHand&&startHand[r])||0);let dist=new Map([[enc(initial),1]]);for(let t=0;t<T;t++){const next=new Map();for(const [k,p]of dist){const a=dec(k);for(const o of outs){const nk=enc(a.map((x,i)=>x+o.add[i]));next.set(nk,(next.get(nk)||0)+p*o.pr);}}dist=next;}
+  let unlock=0,burstEscape=0;const p7=1-Math.pow(5/6,3);for(const [k,p]of dist){const a=dec(k),h=Object.fromEntries(RES5.map((r,i)=>[r,a[i]])),total=a.reduce((s,x)=>s+x,0),ba=_spCanAct(h,before),aa=_spCanAct(h,after);if(aa&&!ba)unlock+=p;if(total>=8&&_spCanCompress(h,after)&&!_spCanCompress(h,before))burstEscape+=p;}
+  return {unlock,burstEscape,p7,score:unlock+p7*burstEscape};
+}
+function _spCanPay(hand,rp,rates,cost,T){
+  let deficit=0,credit=0;for(const r of RES5){const have=(hand[r]||0)+(rp[r]||0)*T/36,need=cost[r]||0;if(have<need)deficit+=need-have;else credit+=(have-need)/(rates[r]||4);}return credit+1e-9>=deficit;
+}
+function _spCostEta(hand,rp,rates,cost){
+  if(_spCanPay(hand,rp,rates,cost,0))return 0;let lo=0,hi=1;while(hi<4096&&!_spCanPay(hand,rp,rates,cost,hi))hi*=2;if(hi>=4096)return 4096;
+  for(let i=0;i<45;i++){const mid=(lo+hi)/2;if(_spCanPay(hand,rp,rates,cost,mid))hi=mid;else lo=mid;}return hi;
+}
+const _SP_PLANS=(()=>{const out=[];for(let LR=0;LR<=1;LR++)for(let LA=0;LA<=1;LA++){if(LR&&LA)continue;for(let V=0;V<=2;V++)for(let C=0;C<=4;C++)for(let S=0;S<=5;S++)if(S+2*C+V+2*LR+2*LA===10&&S+C>=2)out.push({C,S,V,LR,LA});}return out;})();
+function _spPlanCost(pl){
+  const c={wood:0,brick:0,sheep:0,wheat:0,ore:0},nb=Math.max(0,pl.S+pl.C-2);c.wheat+=2*pl.C;c.ore+=3*pl.C;for(const r of ["wood","brick","sheep","wheat"])c[r]+=nb;
+  const roads=.7*nb+(pl.LR?4:0);c.wood+=roads;c.brick+=roads;const k=pl.LA?3:0,d=Math.max(k/(14/25),pl.V/(5/25),(k+pl.V)/(19/25));c.sheep+=d;c.wheat+=d;c.ore+=d;return c;
+}
+const _SP_COSTS=_SP_PLANS.map(p=>({p,c:_spPlanCost(p)}));
+function _spEta10(hand,rp,rates){let best=4096;for(const x of _SP_COSTS){const e=_spCostEta(hand,rp,rates,x.c)+(x.p.LA?12:0);if(e<best)best=e;}return best;}
+function _spLegalTarget(v1,v2,target){
+  if(target===v1||target===v2)return false;if((GEO.vertex_neighbors[String(target)]||[]).includes(v1)||(GEO.vertex_neighbors[String(target)]||[]).includes(v2))return false;if(occupantOf(target))return false;for(const n of (GEO.vertex_neighbors[String(target)]||[]))if(occupantOf(n))return false;return true;
+}
+function _spPath(sp,source,target,freeSource){
+  const used=source!==freeSource&&GEO.edges.some(e=>(e.a===source||e.b===source)&&placements[sp].roads.has(e.id));
+  const dist=new Map([[source,0]]),open=new Set(GEO.vertices.map(v=>v.id));
+  while(open.size){let v=null,dv=Infinity;for(const x of open){const d=dist.has(x)?dist.get(x):Infinity;if(d<dv){v=x;dv=d;}}if(v==null||!isFinite(dv))break;open.delete(v);if(v===target)break;const oc=occupantOf(v);if(v!==source&&oc&&oc.p!==sp)continue;
+    for(const e of GEO.edges){if(e.a!==v&&e.b!==v)continue;const own=ownerOf("roads",e.id);if(own&&own!==sp)continue;const o=e.a===v?e.b:e.a,nd=dv+(own===sp?0:1);if(open.has(o)&&nd<(dist.has(o)?dist.get(o):Infinity))dist.set(o,nd);}}
+  return dist.has(target)?Math.max(0,dist.get(target)-(used?0:1)):null;
+}
+function _spBestPort(sp,v1,v2,prod,rp,hand,rates,baseEta){
+  let best=null;const reach=new Map(),etas=new Map(),liquids=new Map();for(const [eidS,type]of Object.entries(ports||{})){const e=GEO.edges[Number(eidS)];if(!e||[v1,v2].includes(e.a)||[v1,v2].includes(e.b))continue;
+    for(const target of [e.a,e.b]){if(!_spLegalTarget(v1,v2,target))continue;const paid=[_spPath(sp,v1,target,v2),_spPath(sp,v2,target,v2)].filter(x=>x!=null).sort((a,b)=>a-b)[0];if(paid==null||paid>4)continue;
+      const cost={wood:1+paid,brick:1+paid,sheep:1,wheat:1,ore:0},after=_spRatesWith(rates,type);if(!reach.has(paid)){const x=_racePure(prod,rates,[cost],hand,12,1);reach.set(paid,x?x.cum:0);}if(!etas.has(type))etas.set(type,_spEta10(hand,rp,after));if(!liquids.has(type))liquids.set(type,_spLiquidity(prod,rates,after,8));
+      const p12=reach.get(paid),etaGain=Math.max(0,baseEta-etas.get(type)),liquidity=liquids.get(type),total=RES5.reduce((s,r)=>s+(rp[r]||0),0),focus=type==="3:1"?1:(rp[type]||0)/Math.max(1,total),score=2.5*p12+(etaGain/18)*p12+focus*p12+3*p12*liquidity.score-.12*paid;
+      const z={type,target,paid,p12,etaGain,liquidity,score};if(!best||z.score>best.score)best=z;}
+  }return best;
+}
+function _spMetrics(sp,v1,v2){
+  const prod=_spProd(v1,v2),r=_spResPips(v1,v2),hand=_spStartHand(v2),rates=_spRates(v1,v2),growth=[{wheat:2,ore:3},{wood:1,brick:1,sheep:1,wheat:1}],eta10=_spEta10(hand,r,rates),p8x=_racePure(prod,rates,growth,hand,8,1),p12x=_racePure(prod,rates,growth,hand,12,1),totalPip=RES5.reduce((s,x)=>s+(r[x]||0),0);
+  return {r,hand,totalPip,p8:p8x?p8x.cum:0,p12:p12x?p12x.cum:0,eta10,port:_spBestPort(sp,v1,v2,prod,r,hand,rates,eta10)};
+}
+function _spDominates(a,b){
+  if(!a||!b||a.totalPip<b.totalPip||a.eta10>b.eta10||a.p12<b.p12+.10||a.p8+.02<b.p8)return false;const ap=a.port?a.port.p12:0,bp=b.port?b.port.p12:0;if(ap<bp+.20)return false;
+  const ea=(a.r.wood||0)+(a.r.brick||0),eb=(b.r.wood||0)+(b.r.brick||0);return (a.r.wheat||0)>=6&&ea>=eb+6&&(b.r.ore||0)<=2&&(a.r.ore||0)<=(b.r.ore||0)&&a.port&&a.port.type==="3:1";
+}
+function setupPairPick(sp,B,defaultId){
+  if(!game||!game.setup||placements[sp].settlements.size!==1)return defaultId;const v1=[...placements[sp].settlements][0],ids=B.ranked.slice(0,20);for(const v of B.ranked)if(!ids.includes(v)&&(B.scores[v].port||B.scores[v].pip>=11))ids.push(v);
+  const def=_spMetrics(sp,v1,defaultId);let best={id:defaultId,m:def};for(const id of ids){if(id===defaultId)continue;const m=_spMetrics(sp,v1,id);if(_spDominates(m,def)&&m.p12>best.m.p12)best={id,m};}
+  const changed=best.id!==defaultId;game.setupPairDecision={seat:sp,first:v1,from:defaultId,to:best.id,changed,baseline:def,chosen:best.m};
+  game.setupPairIntents=game.setupPairIntents||{};
+  if(changed&&best.m.port)game.setupPairIntents[sp]={kind:"port",target:best.m.port.target,type:best.m.port.type,createdRoll:game.rollCount||0,liquidity:best.m.port.liquidity};
+  else delete game.setupPairIntents[sp];
+  return best.id;
 }
 // プレイヤーpの「出目→獲得資源」テーブル。extraVertexに頂点IDを渡すと、そこに新規開拓地を建てた場合の増産を織り込む。
 function _prodTableFor(p, extraVertex){
@@ -3803,7 +3544,7 @@ function computeAdvice(){
   if(typeof FAST_PLAYOUT!=="undefined" && FAST_PLAYOUT && game && game._bestCache && game._bestCacheKey===p+"_"+oreShort){
     B=game._bestCache;
   }else{
-    B=computeBest(RF);
+    B=computeBest(RF, p);
     if(typeof FAST_PLAYOUT!=="undefined" && FAST_PLAYOUT && game){ game._bestCache=B; game._bestCacheKey=p+"_"+oreShort; }
   }
 
@@ -3811,8 +3552,14 @@ function computeAdvice(){
   const plan = (typeof USE_BACKSOLVE==="undefined" || USE_BACKSOLVE) ? backSolve(p) : null;
   const goal = plan ? plan.plan : null;
   const planLabel = goal ? planName(goal) : "";
-  const wantsCities = goal ? (goal.C > (placements[p].cities?placements[p].cities.size:0)) : true;
-  const wantsSettles = goal ? (goal.S > placements[p].settlements.size) : true;
+  const dynSupport=plan&&plan.dynamic&&plan.dynamic.support;
+  const citySupport=dynSupport?dynSupport.city:(goal&&goal.C>(placements[p].cities?placements[p].cities.size:0)?1:0);
+  const settleSupport=dynSupport?dynSupport.settle:(goal&&goal.C+goal.S>placements[p].settlements.size+(placements[p].cities?placements[p].cities.size:0)?1:0);
+  const vpSupport=dynSupport?dynSupport.vp:(goal&&goal.V>game.dev.hands[p].vp?1:0);
+  const armySupport=dynSupport?dynSupport.LA:(goal&&goal.LA&&game.la.holder!==p?1:0);
+  const roadSupport=dynSupport?dynSupport.LR:(goal&&goal.LR&&game.lr.holder!==p?1:0);
+  const wantsCities = goal ? (dynSupport?citySupport>=.25:citySupport>0) : true;
+  const wantsSettles = goal ? (dynSupport?settleSupport>=.25:settleSupport>0) : true;
   // ワンチャン狙いv2: 明確な最下位なら、都市化より開拓地(資源効率が良い)を優先して量で追いつく
   let _isDesperate2=false;
   if(typeof GAMBIT2!=="undefined" && GAMBIT2){
@@ -3821,9 +3568,9 @@ function computeAdvice(){
     const maxOther=Math.max(...vps.filter((v,i)=>i+1!==p));
     _isDesperate2 = myVp<=Math.min(...vps) && maxOther-myVp>=3;
   }
-  const wantsVP = goal ? (goal.V > game.dev.hands[p].vp) : false;
-  const wantsArmy = goal ? (goal.LA && game.la.holder!==p) : false;
-  const wantsRoad = goal ? (goal.LR && game.lr.holder!==p) : false;
+  const wantsVP = goal ? (dynSupport?vpSupport>=.25:vpSupport>0) : false;
+  const wantsArmy = goal ? (dynSupport?armySupport>=.25:armySupport>0) : false;
+  const wantsRoad = goal ? (dynSupport?roadSupport>=.25:roadSupport>0) : false;
 
   // === 思考1: できるだけ早く大きな資源上昇 ===
   const exp0=production(p); const prodNow=Object.values(exp0).reduce((a,b)=>a+b,0);
@@ -3838,8 +3585,8 @@ function computeAdvice(){
   }
   if(bc){
     let cityScore = ((typeof USE_EV!=="undefined"&&USE_EV)
-      ? actionValue("city", p, {vid:bc.vid}) + (wantsCities?3:0)
-      : bc.v*1.5+8+(wantsCities?3:0)) * (_isDesperate2?0.6:1) * W_CITY;
+      ? actionValue("city", p, {vid:bc.vid}) + (dynSupport?3*citySupport:(wantsCities?3:0))
+      : bc.v*1.5+8+(dynSupport?3*citySupport:(wantsCities?3:0))) * (_isDesperate2?0.6:1) * W_CITY;
     // 鉄希少センサー（ユーザーの判断を移植・修正版）:
     // 鉄が希少な盤面では都市化をやや後押し（貴重な鉄拠点に集中）。
     // ただし都市化は「鉄が豊富でも、まず鉄拠点は都市化する」ので、豊富時も下げない。
@@ -3867,8 +3614,8 @@ function computeAdvice(){
   }
   if(bs){
     let settleScore = ((typeof USE_EV!=="undefined"&&USE_EV)
-      ? actionValue("settle", p, {vid:bs.vid}) + ((wantsSettles||oreShort)?2.5:0)
-      : bs.score*0.9+2+((wantsSettles||oreShort)?2.5:0)) * (_isDesperate2?1.5:1) * W_SETTLE;
+      ? actionValue("settle", p, {vid:bs.vid}) + (oreShort?2.5:(dynSupport?2.5*settleSupport:(wantsSettles?2.5:0)))
+      : bs.score*0.9+2+(oreShort?2.5:(dynSupport?2.5*settleSupport:(wantsSettles?2.5:0)))) * (_isDesperate2?1.5:1) * W_SETTLE;
     // 鉄希少センサー: 鉄が豊富(希少度低)な盤面では、都市化した上でさらに拡張を後押しする。
     // （ユーザー指摘: 鉄が豊富でもまず鉄拠点は都市化し、その後で拡張に回る）
     if(typeof ORE_SENSE!=="undefined" && ORE_SENSE){ settleScore *= (1 + ORE_SENSE_W * (1 - boardOreScarcity()) * 0.5); }
@@ -3922,15 +3669,25 @@ function computeAdvice(){
     const rp=_roadPathTarget(p, B);
     if(rp) br={eid:rp.eid, score:rp.eff, opens:(rp.dist===1)};
   }
+  // 道賞支持が十分高く、街道建設1枚で届く範囲なら「建地へ向かう道」と別軸で
+  // 一筆書きの先頭を選ぶ。無料1本目の後も再計算されるため、2本目まで連動する。
+  const dynCfg=DYNAMIC_ROUTE_CFG&&DYNAMIC_ROUTE_CFG[p];
+  if(dynSupport&&roadSupport>=((dynCfg&&dynCfg.roadTargetMin)||.28)&&game.lr.holder!==p){
+    const target=game.lr.holder?(game.lr.len+1):5,gap=Math.max(1,target-longestRoadOf(p));
+    let lp=plan&&plan.dynamic&&plan.dynamic.races&&plan.dynamic.races.LR&&plan.dynamic.races.LR.mine&&plan.dynamic.races.LR.mine.extension;
+    if(!lp&&gap<=2)try{lp=_rwBestExtension(p,2,target);}catch(e){}
+    if(lp&&lp.edges&&lp.edges.length){const old=br;br={eid:lp.edges[0],score:(old?old.score:0)+6*roadSupport,
+      opens:old&&old.eid===lp.edges[0]?old.opens:false,purpose:"dynamic-longest-road"};}
+  }
   if(br){
     let roadScore;
     if(typeof USE_EV!=="undefined"&&USE_EV){
       let openVid=null, openBest=-1;
       const e=GEO.edges[br.eid];
       for(const v of [e.a,e.b]){ for(const n of GEO.vertex_neighbors[v]){ if(B.scores[n] && !reachNow.has(n) && B.scores[n].score>openBest){ openBest=B.scores[n].score; openVid=n; } } }
-      roadScore = actionValue("road", p, {opensVid: br.opens?openVid:null, forLongestRoad: wantsRoad}) + (wantsRoad?2.5:0);
+      roadScore = actionValue("road", p, {opensVid: br.opens?openVid:null, forLongestRoad: wantsRoad}) + (dynSupport?2.5*roadSupport:(wantsRoad?2.5:0));
     }else{
-      roadScore = (br.score*0.35 + (br.opens?1.5:0) + (wantsRoad?2.5:0)) * W_ROAD;
+      roadScore = (br.score*0.35 + (br.opens?1.5:0) + (dynSupport?2.5*roadSupport:(wantsRoad?2.5:0))) * W_ROAD;
     }
     // 既に建設可能な空き頂点があるのに道を引くのは無駄（道賞プランを除く）→ 大幅減点
     if(reachNow.size>0 && !wantsRoad) roadScore -= 6;
@@ -3999,7 +3756,8 @@ function computeAdvice(){
   if(typeof THREAT_LOOKAHEAD!=="undefined" && THREAT_LOOKAHEAD){ try{ _tlGovernor(p, list); }catch(e){} }
   list.sort((a,b)=> (b.can===a.can ? b.score-a.score : (b.can?1:0)-(a.can?1:0)));
   // 逆算プランを先頭メタ情報として付ける（表示用）
-  list._plan = goal ? {label:planLabel, turns: plan.turns, oreShort} : null;
+  list._plan = goal ? {label:planLabel, turns: plan.turns, oreShort,
+    portfolio:plan.portfolio||null,support:dynSupport||null} : null;
   return list;
 }
 // プラン名の文字列化
@@ -4180,38 +3938,115 @@ function backSolveOne(p, plan){
     t+=need*turnsToAfford(p,{wood:1,brick:1})*0.8; }
   return t;
 }
+
+function _dynamicDevCredit(observer,q,kind){
+  if(q===observer){
+    const h=game.dev&&game.dev.hands&&game.dev.hands[q];return h?(h[kind]||0):0;
+  }
+  const n=_rpHeldDevCount(q);
+  if(kind==="knight")return n*(14/25);
+  if(kind==="roads")return n*(2/25);
+  if(kind==="vp")return n*(5/25);
+  return 0;
+}
+function _dynamicAwardRaceEta(observer,q,kind){
+  const hand=game.hands[q];
+  if(kind==="LR"){
+    if(game.lr.holder===q)return {eta:0,need:0,paid:0,extension:null};
+    const target=game.lr.holder?(game.lr.len+1):5,gap=Math.max(1,target-longestRoadOf(q));
+    let need=gap,extension=null;
+    // 街道建設1枚で届く範囲だけ一筆書きを完全探索。遠方は1本道ごとに再計画する。
+    if(gap<=2)try{extension=_rwBestExtension(q,2,target);if(extension)need=extension.edges.length;}catch(e){}
+    const placedFree=(q===observer)?Math.max(0,game.freeRoads||0):0;
+    const free=Math.min(need,placedFree+2*_dynamicDevCredit(observer,q,"roads"));
+    const paid=Math.max(0,need-free),unit=turnsToAfford(q,COST.road,hand);
+    return {eta:Math.min(128,paid*unit*0.8),need,paid,free,extension};
+  }
+  if(game.la.holder===q)return {eta:0,need:0,buy:0};
+  const target=game.la.holder?(game.la.count+1):3,need=Math.max(0,target-(game.army[q]||0));
+  const held=Math.min(need,_dynamicDevCredit(observer,q,"knight")),buy=Math.max(0,need-held);
+  return {eta:Math.min(128,buy*turnsToAfford(q,COST.dev,hand)*1.1+Math.max(0,need-1)*4),need,buy,held};
+}
+function _dynamicRaceThreat(q){
+  let prod=0;try{prod=Object.values(production(q)).reduce((a,b)=>a+b,0);}catch(e){}
+  const expectedVP=_rpVisibleVP(q)+_rpHeldDevCount(q)*(5/25);
+  return 0.65+Math.max(0,Math.min(1,(expectedVP-4)/5))+0.25*Math.max(0,Math.min(1,prod/1.8));
+}
+function _dynamicRaceSnapshot(p,kind){
+  const mine=_dynamicAwardRaceEta(p,p,kind);let rival={q:null,eta:Infinity,threat:0};
+  for(const q of game.order){if(q===p)continue;const z=_dynamicAwardRaceEta(p,q,kind),th=_dynamicRaceThreat(q);
+    if(z.eta<rival.eta-1e-9||(Math.abs(z.eta-rival.eta)<1e-9&&th>rival.threat))rival={q,eta:z.eta,threat:th,detail:z};}
+  return {kind,mine,rival,holder:kind==="LR"?game.lr.holder:game.la.holder};
+}
+function _dynamicLegacyAwardCost(p,kind){
+  if(kind==="LA"){
+    if(game.la.holder===p)return 0;
+    const target=Math.max(3,(game.la.count||0)+1),need=Math.max(0,target-(game.army[p]||0));
+    return need*turnsToAfford(p,COST.dev)*1.1;
+  }
+  if(game.lr.holder===p)return 0;
+  return 5*turnsToAfford(p,COST.road)*0.8;
+}
+function _dynamicPlanSupports(rows){
+  const out={city:0,settle:0,vp:0,LR:0,LA:0,both:0};
+  for(const r of rows){const g=r.plan,w=r.weight||0,c=placements[r.p].cities?placements[r.p].cities.size:0,b=c+placements[r.p].settlements.size;
+    if(g.C>c)out.city+=w;if(g.C+g.S>b)out.settle+=w;if(g.V>((game.dev.hands[r.p]&&game.dev.hands[r.p].vp)||0))out.vp+=w;
+    if(g.LR&&game.lr.holder!==r.p)out.LR+=w;if(g.LA&&game.la.holder!==r.p)out.LA+=w;if(g.LR&&g.LA)out.both+=w;}
+  return out;
+}
+function _dynamicBackSolveKey(p){
+  const ps=[];for(const q of game.order){const pl=placements[q],h=game.hands[q]||{},d=game.dev.hands[q]||{};
+    ps.push([q,[...pl.settlements].sort((a,b)=>a-b),[...(pl.cities||[])].sort((a,b)=>a-b),[...pl.roads].sort((a,b)=>a-b),
+      RES5.map(r=>h[r]||0),q===p?[d.knight||0,d.vp||0,d.roads||0,d.plenty||0,d.mono||0]:[_rpHeldDevCount(q)],game.army[q]||0]);}
+  return JSON.stringify([p,game.idx,game.phase,game.devPlayed?1:0,game.freeRoads||0,game.robber,game.lr.holder,game.lr.len,game.la.holder,game.la.count,ps]);
+}
 // 全プランから最短を選ぶ
 function backSolve(p){
   const cur_c=placements[p].cities?placements[p].cities.size:0;
+  const cfg=DYNAMIC_ROUTE_CFG&&DYNAMIC_ROUTE_CFG[p];
+  let cacheKey=null;if(cfg){cacheKey=_dynamicBackSolveKey(p);const c=DYNAMIC_ROUTE_CACHE.get(game);if(c&&c.has(cacheKey))return c.get(cacheKey);}
+  const lr=cfg?_dynamicRaceSnapshot(p,"LR"):null,la=cfg?_dynamicRaceSnapshot(p,"LA"):null,rows=[];
   let best=null;
   for(const plan of WIN_PLANS){
     if(plan.C<cur_c) continue;   // 都市は減らない
-    const t=backSolveOne(p, plan);
-    if(!best||t<best.turns) best={plan, turns:t};
+    const raw=backSolveOne(p,plan);let t=raw,adjust=0;
+    if(cfg){
+      const applyRace=(kind,race)=>{if(!plan[kind])return;t-=_dynamicLegacyAwardCost(p,kind);t+=race.mine.eta;
+        const rival=race.rival;if(!rival||rival.q==null||!isFinite(rival.eta))return;
+        if(race.holder===p)adjust+=(cfg.holdW==null ? .35 : cfg.holdW)*Math.max(0,Math.min(24,t-rival.eta))*rival.threat;
+        else{const gap=race.mine.eta-rival.eta;if(gap>0)adjust+=(cfg.contestW==null ? .75 : cfg.contestW)*Math.min(24,gap)*rival.threat;
+          else adjust-=(cfg.denyW==null ? .18 : cfg.denyW)*Math.min(12,-gap)*rival.threat;}};
+      applyRace("LR",lr);applyRace("LA",la);t+=Math.max(-12,Math.min(48,adjust));
+    }
+    const row={p,plan,turns:t,rawTurns:raw,adjust};rows.push(row);if(!best||t<best.turns)best=row;
+  }
+  if(cfg&&best){
+    const top=rows.sort((a,b)=>a.turns-b.turns).slice(0,Math.max(1,Math.min(8,cfg.topK||5))),beta=cfg.beta==null ? .22 : cfg.beta,min=top[0].turns;
+    let z=0;for(const r of top){r.weight=Math.exp(-beta*Math.max(0,r.turns-min));z+=r.weight;}for(const r of top)r.weight/=z||1;
+    best={plan:top[0].plan,turns:top[0].turns,rawTurns:top[0].rawTurns,
+      portfolio:top.map(r=>({plan:r.plan,turns:r.turns,rawTurns:r.rawTurns,adjust:r.adjust,weight:r.weight})),
+      dynamic:{support:_dynamicPlanSupports(top),races:{LR:lr,LA:la}}};
+    let c=DYNAMIC_ROUTE_CACHE.get(game);if(!c){c=new Map();DYNAMIC_ROUTE_CACHE.set(game,c);}if(c.size>96)c.clear();c.set(cacheKey,best);
   }
   return best;
 }
-
-// 盗賊配置の学習モデル評価（1万試合・181,606イベントから学習。AUC 0.6035）
-function robberModelScore(hexId, actP){
-  const b=board[hexId]; if(!b) return 0.3;
-  let maxVpTouched=0, sumWeightedPip=0, selfTouched=false, numOwners=0;
-  for(const v of hexVertsG(hexId)){
-    const oc=occupantOf(v);
-    if(oc){
-      const mult=(oc.type==="city")?2:1;
-      sumWeightedPip += mult*pipOf(b.number);
-      if(oc.p===actP) selfTouched=true;
-      else{ numOwners++; if(vpOf(oc.p)>maxVpTouched) maxVpTouched=vpOf(oc.p); }
-    }
-  }
-  const res=b.resource||"desert";
-  const x=[pipOf(b.number), maxVpTouched, sumWeightedPip, selfTouched?1:0, numOwners, game.diceCount||0,
-    res==="ore"?1:0, res==="wheat"?1:0, res==="sheep"?1:0, res==="wood"?1:0, res==="brick"?1:0];
-  let z=ROBBER_MODEL.intercept;
-  x.forEach((v,i)=>{ z += ROBBER_MODEL.coef[i]*((v-ROBBER_MODEL.mean[i])/ROBBER_MODEL.scale[i]); });
-  return 1/(1+Math.exp(-z));
+function _dynamicHasSettleSpot(p){
+  for(const vs in GEO.vertex_neighbors){const v=Number(vs);if(occupantOf(v))continue;if((GEO.vertex_neighbors[vs]||[]).some(x=>occupantOf(x)))continue;
+    if(GEO.edges.some(e=>(e.a===v||e.b===v)&&placements[p].roads.has(e.id)))return true;}
+  return false;
 }
+function _dynamicRoadCardIntent(p){
+  const cfg=DYNAMIC_ROUTE_CFG&&DYNAMIC_ROUTE_CFG[p];if(!cfg)return null;
+  let solved=null;try{solved=backSolve(p);}catch(e){return {use:false};}
+  const sup=solved&&solved.dynamic&&solved.dynamic.support;if(!sup)return {use:false};
+  const min=cfg.cardRoadMin==null ? .28 : cfg.cardRoadMin,target=game.lr.holder?(game.lr.len+1):5,gap=Math.max(1,target-longestRoadOf(p));
+  const race=solved.dynamic.races&&solved.dynamic.races.LR;let ext=race&&race.mine&&race.mine.extension;if(!ext&&gap<=2)try{ext=_rwBestExtension(p,2,target);}catch(e){}
+  const rivalEta=race&&race.rival?race.rival.eta:Infinity,viable=!race||!isFinite(rivalEta)||race.mine.eta<=rivalEta+(cfg.cardRaceSlack==null?4:cfg.cardRaceSlack);
+  let use=!!(sup.LR>=min&&viable&&((gap<=2&&ext&&ext.edges.length<=2)||(gap>=3&&gap<=4)));
+  if(!use&&sup.settle>=Math.max(.45,min)&&!_dynamicHasSettleSpot(p))use=true;
+  return {use,solved,extension:ext};
+}
+
 // 鉄麦羊の継続産出から、1ダイスあたり何枚の発展カードを買えるかを推定する。
 // 余剰資源は所有港の2:1/3:1（無ければ4:1）で不足資源へ変換できるものとして計算。
 function devProductionRate(q){
@@ -4424,17 +4259,18 @@ function _rpBuildOptions(q){
     const first=placements[q].cities.size===0;
     out.push({kind:"city",cost:COST.city,impact:(first?2.4:1.35)+bestPip/5});
   }
-  if(placements[q].settlements.size+placements[q].cities.size<7){
-    let bp=0;
+  if(placements[q].settlements.size<5){
+    let bp=0,hasSpot=false;
     try{
       for(const vx of GEO.vertices){ const v=vx.id;
         if(occupantOf(v)||(GEO.vertex_neighbors[String(v)]||[]).some(n=>occupantOf(n)))continue;
         if(!GEO.edges.some(e=>(e.a===v||e.b===v)&&placements[q].roads.has(e.id)))continue;
+        hasSpot=true;
         let pp=0;for(const hid of (GEO.vertex_hexes[String(v)]||[])){const b=board[hid];if(b&&b.number)pp+=pipOf(b.number);}
         bp=Math.max(bp,pp);
       }
     }catch(e){}
-    out.push({kind:"settle",cost:COST.settlement,impact:1.1+bp/6});
+    if(hasSpot)out.push({kind:"settle",cost:COST.settlement,impact:1.1+bp/6});
   }
   if(game.dev&&game.dev.deck&&game.dev.deck.length){
     const armyGap=Math.max(0,3-(game.army[q]||0));
@@ -4589,9 +4425,6 @@ function robberAdvice(){
     const ownsMe=hexVertsG(hx.id).some(v=>{const oc=occupantOf(v); return oc&&oc.p===cur();});
     const ow=(b.resource==="ore"||b.resource==="wheat");
     let sc=pipOf(b.number)*(ow?2:1);
-    if(typeof USE_ROBBER_MODEL!=="undefined" && USE_ROBBER_MODEL){
-      sc = sc*0.5 + robberModelScore(hx.id, cur())*20*0.5;   // ルールスコアと学習モデル勝率(×20でスケール合わせ)を50:50でブレンド
-    }
     if(ownsMe){ if(!fallback||sc>fallback.sc) fallback={hid:hx.id, sc, top, res:b.resource, num:b.number}; continue; }
     if(!best||sc>best.sc) best={hid:hx.id, sc, top, res:b.resource, num:b.number};
   }
@@ -4993,45 +4826,8 @@ function clickPort(eid){
   ports[eid]=activePort; render();
 }
 // 境界辺どうしの隣接（頂点を共有する海岸線の辺）
-const BOUNDARY_ADJ=(()=>{
-  const b=[...BOUNDARY]; const eb={};
-  for(const e of GEO.edges) eb[e.id]=[e.a,e.b];
-  const adj={}; for(const id of b) adj[id]=[];
-  for(let i=0;i<b.length;i++) for(let j=i+1;j<b.length;j++){
-    const [a1,a2]=eb[b[i]], [c1,c2]=eb[b[j]];
-    if(a1===c1||a1===c2||a2===c1||a2===c2){ adj[b[i]].push(b[j]); adj[b[j]].push(b[i]); }
-  }
-  return adj;
-})();
-
-// 港は**公式どおり固定のドック位置**に置く。実物のCatanは海枠に港が印刷されていて動かず、
-// 「どのドックがどの資源の港か」だけが並べ方で変わる。
-// 公式の間隔は海岸線30辺に対して (3,3,4)×3 ＝ どの港どうしも2辺以上離れる。
+// 港は公式固定盤面の9つの入り江に置き、「どの入り江がどの資源港か」だけを変える。
 function randomPorts(){ officialPorts(); }
-// 旧: 海岸線からランダムに9箇所（隣接だけ回避）。公式の等間隔になっておらず、
-//     実測で間隔が 3,3,3,6,3,2,3,2,5 のように偏っていた。参考のため残す。
-function randomPortsScattered(){
-  ports={};
-  const types=shuffle(PORT_TYPES.slice());   // 9個（3:1×4, 各資源2:1×5）
-  // 港どうしが隣り合わないように海岸線へ配置（公式は等間隔＝隣接しない）
-  for(let attempt=0; attempt<200; attempt++){
-    const chosen=[]; const used=new Set();
-    const pool=shuffle([...BOUNDARY]);
-    for(const eid of pool){
-      if(chosen.length>=types.length) break;
-      if(BOUNDARY_ADJ[eid].some(n=>used.has(n))) continue;  // 隣に港がある辺は避ける
-      chosen.push(eid); used.add(eid);
-    }
-    if(chosen.length>=types.length){
-      ports={};
-      for(let i=0;i<types.length;i++) ports[chosen[i]]=types[i];
-      return;
-    }
-  }
-  // 保険（隣接回避で埋まらないとき）：単純ランダム
-  const edges=shuffle([...BOUNDARY]);
-  for(let i=0;i<types.length;i++) ports[edges[i]]=types[i];
-}
 function buildPortPicker(){
   const box=document.getElementById("portPicker"); box.innerHTML="";
   for(const t of PORT_LIST){
@@ -5089,39 +4885,6 @@ function buildPlayers(){
     box.appendChild(b);
   }
 }
-
-function buildWinner(){
-  const sel=document.getElementById("winner"); sel.innerHTML="";
-  const none=new Option("未設定",""); sel.appendChild(none);
-  for(let p=1;p<=numPlayers;p++) sel.appendChild(new Option(`P${p} 勝利`,String(p)));
-  sel.value = winner===null?"":String(winner);
-  sel.onchange=()=>{
-    const prev=winner; winner = sel.value===""?null:Number(sel.value);
-    // ラベルが未設定、または直前まで勝者と一致していたら、勝者に追従させる
-    if(bestPlayer===null || bestPlayer===prev) bestPlayer = winner;
-    buildLabel();
-  };
-  buildLabel();
-}
-
-function buildLabel(){
-  const sel=document.getElementById("labelPlayer"); if(!sel) return; sel.innerHTML="";
-  sel.appendChild(new Option("勝者と同じ（未指定）",""));
-  for(let p=1;p<=numPlayers;p++) sel.appendChild(new Option(`P${p} が最善`,String(p)));
-  const eff = bestPlayer!==null ? bestPlayer : winner;   // 表示上の既定は勝者
-  sel.value = eff===null?"":String(eff);
-  sel.onchange=()=>{ bestPlayer = sel.value===""?null:Number(sel.value); };
-}
-
-function buildLegend(){
-  const box=document.getElementById("legend"); box.innerHTML="";
-  for(const [k,label] of Object.entries(RES_JP)){
-    const s=document.createElement("span");
-    s.innerHTML=`<span class="sw" style="background:${RES_COLOR[k]}"></span>${label}`;
-    box.appendChild(s);
-  }
-}
-
 // --- 入出力 --------------------------------------------------------------
 function toJSON(){
   return {
@@ -5142,33 +4905,6 @@ function toJSON(){
     source: dataSource                                // 出どころ（実戦=colonist / 自己対戦=selfplay / 手入力=manual）
   };
 }
-function fromJSON(data){
-  if(game) endGameMode();
-  endSim();
-  resetPlacements();
-  for(const h of data.board.hexes) board[h.id]={resource:h.resource,number:h.number};
-  ports={}; (data.ports||[]).forEach(p=>{ ports[p.edge]=p.type; });
-  for(const [p,d] of Object.entries(data.placements||{})){
-    if(!placements[p]) placements[p]={settlements:new Set(), roads:new Set(), cities:new Set()};
-    if(!placements[p].cities) placements[p].cities=new Set();
-    (d.settlements||[]).forEach(v=>placements[p].settlements.add(v));
-    (d.cities||[]).forEach(v=>placements[p].cities.add(v));
-    (d.roads||[]).forEach(e=>placements[p].roads.add(e));
-  }
-  winner = data.winner ?? null;
-  bestPlayer = (data.label ?? data.winner) ?? null;
-  dataSource = data.source || "manual";
-  try{ if(typeof gameNote!=="undefined") gameNote = data.note || ""; }catch(e){}
-  if(Array.isArray(data.replay) && data.replay.length){
-    replay={turns:data.replay, idx:0, active:true};
-    document.getElementById("replayBar").style.display="";
-  } else {
-    exitReplay();
-  }
-  buildWinner(); render(); updateTilePicker();
-  if(replay && replay.active) showReplayTurn();
-}
-
 // --- トースト ------------------------------------------------------------
 let toastTimer;
 function toast(msg){
