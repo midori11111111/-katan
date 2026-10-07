@@ -37,8 +37,11 @@ const second=setupLearnedPick(1,finalB,finalB.ranked[0]);
 if(!finalB.ranked.includes(second))throw new Error("learned conditional second pick is illegal");
 const after=JSON.stringify(Object.fromEntries([1,2,3,4].map(p=>[p,[...placements[p].settlements]])));
 if(before!==after)throw new Error("conditional-second inference mutated placements");
-const info=setupLearnedInfo();
-if(!info.enabled||info.run!=="2026-09-26T08-00-11-086Z-gen0-e60077"||info.blend!==0.5)throw new Error("setup model metadata mismatch");
+const info=setupLearnedInfo(1);
+if(!info.enabled||info.run!==expectedRun||info.blend!==expectedBlend)throw new Error("setup model metadata mismatch");
+if(setupLearnedBundle(1)!==SETUP_LEARNED_GENERATIONS[expectedGeneration])throw new Error("wrong generation selected");
+SETUP_LEARNED_ENABLED=false;
+if(setupLearnedInfo(1).enabled)throw new Error("disabled flag missing from metadata");
 console.log("setup-learning ok:",JSON.stringify({baseline,first,second,run:info.run,blend:info.blend,rate:info.evaluation.rate}));
 `;
 
@@ -48,4 +51,13 @@ const context = {
   document:{getElementById:()=>null,querySelector:()=>null,createElement:()=>({})},
   window:{addEventListener:()=>{}}, Option:function Option(){}
 };
-vm.runInNewContext(engine + "\n" + bundle + "\n" + runtime + "\n" + test, context, { timeout:30000 });
+for (const [generation, run, blend] of [
+  ["gen0", "2026-09-26T08-00-11-086Z-gen0-e60077", 0.5],
+  ["gen1", "2026-09-30T17-15-42-677Z-gen1-96f2da", 1],
+  ["gen2", "2026-10-04T18-45-49-385Z-gen2-dd5d05", 0.5]
+]) {
+  vm.runInNewContext(engine + "\n" + bundle + "\n" + runtime + "\n" + test, {
+    ...context, seatAI:{1:generation === "gen0" ? "strong" : generation},
+    expectedGeneration:generation, expectedRun:run, expectedBlend:blend
+  }, { timeout:30000 });
+}

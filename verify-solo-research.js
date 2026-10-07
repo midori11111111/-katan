@@ -19,7 +19,7 @@ async function call(handler, method, url, body, headers = {}) {
 function state(phase = "main") {
   return {
     schema: 1, policyVersion: "solo-policy", board: [], ports: [], placements: {},
-    seatAI: { 1: "strong", 2: "strong", 3: "human", 4: "invincible" },
+    seatAI: { 1: "gen1", 2: "gen2", 3: "human", 4: "invincible" },
     savedAt: Date.now(), name: "保存してはいけない名前", token: "top-secret",
     game: {
       phase, order: [1, 2, 3, 4], idx: 2, hands: { 3: { wood: 1 } },
@@ -75,6 +75,7 @@ function state(phase = "main") {
   assert.equal(exported.body.record.winner, 3);
   assert.deepEqual(exported.body.record.humanSeats, [3]);
   assert.deepEqual(exported.body.record.aiSeats, [1, 2, 4]);
+  assert.deepEqual(exported.body.record.state.seatAI, {1:"gen1",2:"gen2",3:"human",4:"invincible"});
   assert.equal(exported.body.decisions.length, 1);
   assert.equal(exported.body.decisions[0].before.game.phase, "roll");
   assert.equal(exported.body.decisions[0].actions[0].name, "gameClickVertex");

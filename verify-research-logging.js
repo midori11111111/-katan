@@ -18,16 +18,19 @@ async function call(handler, method, url, body, headers = {}) {
 }
 
 (async () => {
-  const created = await call(rooms, "POST", "/api/rooms", { op: "create", name: "秘密の名前", humanCount: 2 });
+  const created = await call(rooms, "POST", "/api/rooms", { op: "create", name: "秘密の名前", humanCount: 2, aiKind:"gen2" });
   assert.equal(created.status, 201);
+  assert.equal(created.body.room.aiKind, "gen2");
   const code = created.body.code, hostToken = created.body.token;
 
   const joined = await call(rooms, "POST", "/api/rooms", { op: "join", code, name: "相手の名前" });
   assert.equal(joined.status, 200);
+  assert.equal(joined.body.room.aiKind, "gen2");
   const started = await call(rooms, "POST", "/api/rooms", {
     op: "start", code, token: hostToken, version: joined.body.room.version
   });
   assert.equal(started.status, 200);
+  assert.equal(started.body.room.aiKind, "gen2");
   const hostSeat = Number(started.body.seat);
 
   const state = {

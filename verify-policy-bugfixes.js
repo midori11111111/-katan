@@ -4,6 +4,7 @@ const vm = require("vm");
 const engine = fs.readFileSync(require.resolve("./js/engine.js"), "utf8");
 const app = fs.readFileSync(require.resolve("./js/app.js"), "utf8");
 const config = app.slice(app.indexOf("function _applyVariant(seat){"), app.indexOf("\nfunction aiStep(){"));
+const strongKinds = app.match(/function isStrongSeatKind\(kind\)\{[^\n]+/)[0];
 if (!config.startsWith("function _applyVariant") || !config.trimEnd().endsWith("}")) {
   throw new Error("本番AI設定を抽出できません");
 }
@@ -55,6 +56,12 @@ _applyVariant(1);
 if(!PORT_SYNERGY||!HP1_PORT||!HUMAN_SETUP||!ROBBER_DELAY||ROAD_NEAR_WIN!==false||!ROLLOUT_SEATS||!ROLLOUT_SEATS.has(1)||!DYNAMIC_ROUTE_CFG||!DYNAMIC_ROUTE_CFG[1]){
   throw new Error("無敵AIが最強AIの設定を継承していません");
 }
+for(const kind of ["gen1","gen2"]){
+  seatAI[1]=kind;_applyVariant(1);
+  if(!PORT_SYNERGY||!HP1_PORT||!HUMAN_SETUP||!ROBBER_DELAY||ROAD_NEAR_WIN!==false||ROLLOUT_SEATS||!DYNAMIC_ROUTE_CFG[1]){
+    throw new Error(kind+"が共通の最強AI本編設定を継承していません");
+  }
+}
 
 // 街道建設は「木土不足」ではなく、10点ルートのLR支持と相手との競争で使用/温存を切り替える。
 game=makeGame({});game.dev.hands[1].roads=1;game.lr={holder:null,len:0};
@@ -102,7 +109,7 @@ const context = {
   window: { addEventListener: () => {} }, Option: function Option() {},
   seatAI: {1:"strong",2:"strong",3:"human",4:"strong"}
 };
-vm.runInNewContext(engine + "\n" + config + "\n" + test, context, { timeout: 30000 });
+vm.runInNewContext(engine + "\n" + strongKinds + "\n" + config + "\n" + test, context, { timeout: 30000 });
 
 const multiplayer = fs.readFileSync(require.resolve("./js/multiplayer.js"), "utf8");
-if (!multiplayer.includes('policyVersion: "20260929a"')) throw new Error("研究データの方策版が古いままです");
+if (!multiplayer.includes('policyVersion: "20261007a"')) throw new Error("研究データの方策版が古いままです");

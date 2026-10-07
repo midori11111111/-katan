@@ -70,6 +70,7 @@ function publicRoom(room) {
     status: room.status,
     aiSeat: aiSeats[0],
     aiSeats,
+    aiKind: ["gen1", "gen2"].includes(room.aiKind) ? room.aiKind : "strong",
     humanCount,
     hostSeat: room.hostSeat,
     debug: Boolean(room.debug),
@@ -104,7 +105,7 @@ function researchRecord(room, state, now) {
     schema: 1,
     id,
     source: "public-online-match",
-    policyVersion: state && state.policyVersion || "20260929a",
+    policyVersion: state && state.policyVersion || "20261007a",
     createdAt: room.createdAt,
     updatedAt: now,
     status: state && state.game && state.game.phase === "over" ? "finished" : "playing",
@@ -180,7 +181,7 @@ module.exports = async function handler(req, res) {
         const aiSeats = [1, 2, 3, 4].filter(seat => seat > humanCount);
         const room = {
           code, version: 1, status: "lobby", aiSeat: aiSeats[0], aiSeats, humanCount, hostSeat: 1,
-          debug: Boolean(body.debug),
+          debug: Boolean(body.debug), aiKind: ["gen1", "gen2"].includes(body.aiKind) ? body.aiKind : "strong",
           researchId: crypto.randomUUID(),
           researchDecisionCount: 0,
           members: { 1: { seat: 1, name: cleanName(body.name), tokenHash: tokenHash(token), joinedAt: now } },

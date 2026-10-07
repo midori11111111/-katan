@@ -54,7 +54,7 @@ function normalizeSeatAI(value) {
   const out = {};
   for (let seat = 1; seat <= 4; seat++) {
     const kind = String(value && (value[seat] || value[String(seat)]) || "strong");
-    out[seat] = kind === "human" ? "human" : kind === "invincible" ? "invincible" : "strong";
+    out[seat] = ["human", "invincible", "gen1", "gen2"].includes(kind) ? kind : "strong";
   }
   return out;
 }

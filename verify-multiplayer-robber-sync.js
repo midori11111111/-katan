@@ -20,6 +20,13 @@ _botDiscard=()=>{game.hands[2].wood--;game.discardQueue.shift();game.phase="robb
 const test = String.raw`
 MP.active=true; MP.applying=false; MP.host=true; MP.seat=1;
 MP.room={aiSeats:[2,3,4],humanCount:1,members:{1:{name:"host"}}};
+for(const kind of ["strong","gen1","gen2"]){
+  MP.room.aiKind=kind;mpApplySeatConfig();
+  if(seatAI[2]!==kind||seatAI[1]!=="human")throw new Error("online generation not applied");
+  if(mpSerialize().seatAI[2]!==kind)throw new Error("online generation missing from snapshot");
+}
+seatAI={1:"gen1",2:"gen2",3:"human",4:"invincible"};
+if(soloSeatConfig()[1]!=="gen1"||soloSeatConfig()[2]!=="gen2")throw new Error("solo generation lost");
 const published=[];
 mpQueuePublish=(actor,source,researchDecision)=>published.push({actor,source,phase:game.phase,researchDecision});
 mpInstallHooks();

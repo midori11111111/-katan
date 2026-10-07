@@ -26,9 +26,9 @@ const I18N = {
     mode_pc:"PC表示", mode_mobile:"スマホ表示",
     setup_title:"対局の設定",
     research_notice:"AI改善のため、表示名・認証情報を含まない対局手順とコメントを匿名で保存します。",
-    setup_lead:"各席のAIタイプを選んで対局。<br><b>挑戦者(関与なし)</b>=自己対戦だけで学習・人間データ不使用／<b>人間模倣</b>=強者棋譜由来の港評価・遅延盗賊・人間寄り配置ON／<b>現行AI</b>=従来の標準型。3種を並べて打たせ見比べられます。",
+    setup_lead:"各席の担当を選んで対局。gen1・gen2は自己対戦で学習した初期配置モデルです。<br>100%・50%は配置判断での学習モデルの比重で、勝率ではありません。本編は最強AIと共通。無敵AIは探索を追加します。",
     your_seat:"あなたの席", you_operate:"あなた（この席を操作）",
-    strong_full:"最強AI", ai_strong:"最強AI", invincible_full:"無敵AI（探索つき・重い）", ai_invincible:"無敵AI", challenger_full:"人間模倣（強者データ由来）", cpure_full:"挑戦者(関与なし)", standard_full:"現行AI（学習モデル・標準）",
+    strong_full:"最強AI（gen0）", ai_strong:"最強AI（gen0）", gen1_full:"gen1 AI（配置学習100%）", ai_gen1:"gen1 AI", gen2_full:"gen2 AI（配置学習50%）", ai_gen2:"gen2 AI", invincible_full:"無敵AI（探索つき・重い）", ai_invincible:"無敵AI", challenger_full:"人間模倣（強者データ由来）", cpure_full:"挑戦者(関与なし)", standard_full:"現行AI（学習モデル・標準）",
     shuffle_btn:"盤面シャッフル", start_btn:"対局開始",
     start_lang:"言語", start_mode:"画面", lang_ja:"日本語", lang_en:"English",
     ai_challenger:"人間模倣", ai_cpure:"挑戦者(関与なし)", ai_standard:"現行AI", ai_you:"あなた",
@@ -98,9 +98,9 @@ const I18N = {
     mode_pc:"PC view", mode_mobile:"Mobile view",
     setup_title:"Game setup",
     research_notice:"To improve the AI, game actions and comments are stored anonymously without display names or authentication data.",
-    setup_lead:"Pick each seat's AI type, then start.<br><b>Challenger (raw)</b> = self-play only, no human data. <b>Human-imitation</b> = strong-player port valuation, delayed robber, human-like placement ON. <b>Current AI</b> = the previous default. Run all three side by side to compare.",
+    setup_lead:"Choose each seat, then start. gen1 and gen2 use self-play-trained setup models.<br>100% and 50% are learned setup ranking weights, not win rates. Main-game play is shared with Strongest AI. Invincible adds search.",
     your_seat:"Your seat", you_operate:"You (you play this seat)",
-    strong_full:"Strongest AI", ai_strong:"Strongest", invincible_full:"Invincible AI (with search, slow)", ai_invincible:"Invincible", challenger_full:"Human-imitation (from strong-player data)", cpure_full:"Challenger (no-human data)", standard_full:"Current AI (learning model)",
+    strong_full:"Strongest AI (gen0)", ai_strong:"Strongest (gen0)", gen1_full:"gen1 AI (100% learned setup)", ai_gen1:"gen1 AI", gen2_full:"gen2 AI (50% learned setup)", ai_gen2:"gen2 AI", invincible_full:"Invincible AI (with search, slow)", ai_invincible:"Invincible", challenger_full:"Human-imitation (from strong-player data)", cpure_full:"Challenger (no-human data)", standard_full:"Current AI (learning model)",
     shuffle_btn:"Shuffle board", start_btn:"Start game",
     start_lang:"Language", start_mode:"Display", lang_ja:"日本語", lang_en:"English",
     ai_challenger:"Human-imitation", ai_cpure:"Challenger (raw)", ai_standard:"Current AI", ai_you:"You",
@@ -166,7 +166,8 @@ function t(k, a){
   return (typeof v==="function") ? v(a||{}) : v;
 }
 function resName(r){ return t("res_"+r); }
-function seatAiName(p){ const x=seatAI[p]; return x==="invincible"?t("ai_invincible"):x==="strong"?t("ai_strong"):x==="challenger"?t("ai_challenger"):x==="cpure"?t("ai_cpure"):x==="puremodel"?t("ai_standard"):t("ai_you"); }
+function isStrongSeatKind(kind){ return ["strong","invincible","gen1","gen2"].includes(kind); }
+function seatAiName(p){ const x=seatAI[p]; return x==="gen1"?t("ai_gen1"):x==="gen2"?t("ai_gen2"):x==="invincible"?t("ai_invincible"):x==="strong"?t("ai_strong"):x==="challenger"?t("ai_challenger"):x==="cpure"?t("ai_cpure"):x==="puremodel"?t("ai_standard"):t("ai_you"); }
 
 // 日本語ログ/トースト文字列を英語に（エンジンが生成する文言用のベストエフォート変換）
 function _devEn(c){ return String(c).replace(/騎士/g,"Knight").replace(/勝利点/g,"VP").replace(/街道建設/g,"Road building").replace(/収穫/g,"Year of plenty").replace(/独占/g,"Monopoly"); }
@@ -351,12 +352,12 @@ function _aiPlayMain(p){
 }
 function _applyVariant(seat){
   const k = (seat!=null && typeof seatAI!=="undefined") ? seatAI[seat] : null;
-  const human = (k==="challenger" || k==="strong" || k==="invincible"); // 無敵AIは最強AIの全設定に探索だけを追加
+  const human = (k==="challenger" || isStrongSeatKind(k)); // 各世代は最強AIと同じ本編設定
   // [2026-08-18] 最強AI: 強い人間の原理から輸入した配置3項をこの席にだけ効かせる。
   //  ETA(あと何ダイスで10点) / 希少資源の独占 / 相手配置の先読み。研究側の実測で標準AIに +10.0pt。
   //  重みは小さい値が正解（大きくすると悪化する）。他の席・他モードには一切影響しない。
   try{
-    const isStrong = (k==="strong" || k==="invincible");
+    const isStrong = isStrongSeatKind(k);
     if(isStrong){
       const one=new Set([seat]);
       // 配置3項（ETA / 島の希少資源の独占 / 相手配置の先読み）
@@ -415,10 +416,10 @@ function aiStep(){
       if(seatAI[sp]==="cpure" && typeof distillPickHTML==="function") v=distillPickHTML(sp);
       if(v==null || occupantOf(v)){
         const B=computeBest();v=B.ranked[0];
-        // 最強AI/無敵AIは、独立24,000局で有意勝ちした配置方策を使う。
+        // 席で選んだgen0/gen1/gen2の検証済み配置方策を使う（無敵AIはgen0）。
         // 1軒目は自己対戦モデル、P1の最終2軒目は条件付きモデル、それ以外は従来の安全上書き。
-        if((seatAI[sp]==="strong"||seatAI[sp]==="invincible")&&typeof setupLearnedPick==="function")v=setupLearnedPick(sp,B,v);
-        else if((seatAI[sp]==="strong"||seatAI[sp]==="invincible")&&typeof setupPairPick==="function")v=setupPairPick(sp,B,v);
+        if(isStrongSeatKind(seatAI[sp])&&typeof setupLearnedPick==="function")v=setupLearnedPick(sp,B,v);
+        else if(isStrongSeatKind(seatAI[sp])&&typeof setupPairPick==="function")v=setupPairPick(sp,B,v);
       }
       try{ active=_saveActive; }catch(e){}
       gameClickVertex(v);
@@ -1175,7 +1176,7 @@ function buildStartScreen(){
   const subEl=document.querySelector(".sublabel[data-i18n='your_seat']");
   if(subEl) subEl.textContent = (LANG==="en"?"Who plays each seat (hot-seat OK)":"各席の担当（人間を複数席OK）");
   $("seatPick").innerHTML="";
-  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["strong",t("strong_full")],["invincible",t("invincible_full")]];
+  const kinds=[["human",LANG==="en"?"You (human)":"人間(操作)"],["strong",t("strong_full")],["gen1",t("gen1_full")],["gen2",t("gen2_full")],["invincible",t("invincible_full")]];
   const grid=$("seatGrid"); grid.innerHTML="";
   for(let s=1;s<=4;s++){
     const row=document.createElement("div"); row.className="seatrow";

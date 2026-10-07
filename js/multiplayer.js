@@ -34,7 +34,7 @@ function soloSeatConfig() {
   for (let seat = 1; seat <= 4; seat++) {
     const kind = String((typeof seatAI !== "undefined" && seatAI && seatAI[seat]) ||
       (typeof seatKind !== "undefined" && seatKind && seatKind[seat]) || "strong");
-    out[seat] = kind === "human" ? "human" : kind === "invincible" ? "invincible" : "strong";
+    out[seat] = ["human", "invincible", "gen1", "gen2"].includes(kind) ? kind : "strong";
   }
   return out;
 }
@@ -182,7 +182,8 @@ function mpAiSeats(room) {
 }
 function mpSeatConfig() {
   const ai = new Set(mpAiSeats()), config = {};
-  for (let seat = 1; seat <= 4; seat++) config[seat] = ai.has(seat) ? "strong" : "human";
+  const kind = ["gen1", "gen2"].includes(MP.room && MP.room.aiKind) ? MP.room.aiKind : "strong";
+  for (let seat = 1; seat <= 4; seat++) config[seat] = ai.has(seat) ? kind : "human";
   return config;
 }
 function mpApplySeatConfig() {
@@ -219,6 +220,7 @@ async function mpCreate() {
     document.getElementById("mpCreate").disabled = true;
     mpSessionFrom(await mpApi("POST", { op: "create", name,
       humanCount: Number(document.getElementById("mpHumanCount")?.value || 3),
+      aiKind: document.getElementById("mpAiKind")?.value || "strong",
       debug: Boolean(document.getElementById("mpDebugCreate")?.checked) }));
     history.replaceState(null, "", "?room=" + MP.code);
   } catch (error) { mpToast("部屋を作れませんでした"); }
@@ -252,7 +254,7 @@ function mpRenderRoom() {
   const aiSeats = new Set(mpAiSeats()), needed = mpHumanCount();
   document.getElementById("mpSeats").innerHTML = [1, 2, 3, 4].map(seat => {
     const member = members[seat], mine = seat === MP.seat, isAISeat = aiSeats.has(seat);
-    const name = isAISeat ? "最強AI" : (member ? member.name : "参加待ち");
+    const name = isAISeat ? (MP.room.aiKind === "gen1" ? "gen1 AI" : MP.room.aiKind === "gen2" ? "gen2 AI" : "最強AI（gen0）") : (member ? member.name : "参加待ち");
     return `<div class="mpseat ${member || isAISeat ? "ready" : ""} ${mine ? "mine" : ""}">
       <b>P${seat}</b><span>${mpEsc(name)}</span><small>${isAISeat ? "AI" : (mine ? (lottery?"あなた・開始時に抽選":"あなた") : member ? (lottery?"開始時に抽選":"接続済み") : "空席")}</small>
     </div>`;
@@ -261,7 +263,7 @@ function mpRenderRoom() {
   const start = document.getElementById("mpStart");
   start.hidden = !MP.host || MP.room.status !== "lobby";
   start.disabled = count !== needed || !mpStorageReady();
-  start.textContent = count === needed ? `${needed}人＋最強AI${4-needed}体で対局開始` : `参加待ち（${count}/${needed}人）`;
+  start.textContent = count === needed ? `${needed}人＋AI${4-needed}体で対局開始` : `参加待ち（${count}/${needed}人）`;
   document.getElementById("mpWait").textContent =
     !mpStorageReady() ? "オンライン同期ストレージの接続待ちです。現在は対局を開始できません" :
     MP.room.status === "playing" ? "対局へ接続しています…" :
@@ -315,7 +317,7 @@ function mpSerialize() {
   delete gameCopy._researchCapture;
   return {
     schema: 1,
-    policyVersion: "20260929a",
+    policyVersion: "20261007a",
     board: JSON.parse(JSON.stringify(board)),
     ports: JSON.parse(JSON.stringify(ports)),
     placements: pl,
@@ -579,11 +581,13 @@ function mpBuildUi() {
     <div class="mpcard">
       <button id="mpClose" class="mpclose" aria-label="閉じる">×</button>
       <h2>オンライン対戦</h2>
-      <p class="mplead">人間2〜3人で対戦し、残りの席には最強AIが入ります。</p>
+      <p class="mplead">人間2〜3人で対戦し、残りの席には選択した世代のAIが入ります。</p>
       <p class="mplead">AI改善のため、表示名を除いた対局手順を匿名で保存します。</p>
       <div id="mpJoinPane">
         <label>表示名<input id="mpName" maxlength="20" autocomplete="nickname" placeholder="あなたの名前"></label>
-        <label>新しい部屋の構成<select id="mpHumanCount"><option value="3">人間3人＋最強AI1体</option><option value="2">人間2人＋最強AI2体</option></select></label>
+        <label>新しい部屋の構成<select id="mpHumanCount"><option value="3">人間3人＋AI1体</option><option value="2">人間2人＋AI2体</option></select></label>
+        <label>対戦するAI<select id="mpAiKind"><option value="strong">最強AI（gen0）</option><option value="gen1">gen1 AI（配置学習100%）</option><option value="gen2">gen2 AI（配置学習50%）</option></select></label>
+        <p class="mplead">%は配置の判断に使う学習モデルの比重で、勝率ではありません。本編は各世代共通です。</p>
         <label class="mpdebug-create"><input id="mpDebugCreate" type="checkbox"> デバッグ部屋にする（ホストが各席を手動操作可能）</label>
         <div class="mpbuttons"><button id="mpCreate" class="btn primary">新しい部屋を作る</button></div>
         <div class="mpor">または</div>

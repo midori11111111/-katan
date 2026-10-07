@@ -271,8 +271,15 @@ function _slCompleteRankPick(B, p, model, blend) {
   return rows[0].v === baseline ? setupPairPick(p, B, B.ranked[0]) : rows[0].v;
 }
 
+function setupLearnedBundle(p) {
+  const kind = typeof seatAI !== "undefined" && seatAI ? seatAI[p] : null;
+  const generation = kind === "gen1" || kind === "gen2" ? kind : "gen0";
+  if (typeof SETUP_LEARNED_GENERATIONS !== "undefined") return SETUP_LEARNED_GENERATIONS[generation] || null;
+  return generation === "gen0" && typeof SETUP_LEARNED_BUNDLE !== "undefined" ? SETUP_LEARNED_BUNDLE : null;
+}
+
 function setupLearnedPick(p, B, defaultId) {
-  const bundle = typeof SETUP_LEARNED_BUNDLE !== "undefined" ? SETUP_LEARNED_BUNDLE : null;
+  const bundle = setupLearnedBundle(p);
   const fallback = () => typeof setupPairPick === "function" ? setupPairPick(p, B, defaultId) : defaultId;
   if (!SETUP_LEARNED_ENABLED || !bundle || !bundle.meta || !bundle.meta.enabled) return fallback();
   const blend = Number(bundle.meta.blend);
@@ -288,7 +295,7 @@ function setupLearnedPick(p, B, defaultId) {
   }
 }
 
-function setupLearnedInfo() {
-  const bundle = typeof SETUP_LEARNED_BUNDLE !== "undefined" ? SETUP_LEARNED_BUNDLE : null;
-  return bundle ? { enabled:SETUP_LEARNED_ENABLED && bundle.meta.enabled, ...bundle.meta } : { enabled:false };
+function setupLearnedInfo(p) {
+  const bundle = setupLearnedBundle(p);
+  return bundle ? { ...bundle.meta, enabled:SETUP_LEARNED_ENABLED && bundle.meta.enabled } : { enabled:false };
 }
