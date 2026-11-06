@@ -12,7 +12,7 @@ async function verifyOnline(browser) {
       page.on("console", m => { if(m.type()==="error") errors.push(`${m.text()} ${m.location().url}`); });
       await page.goto(base, {waitUntil:"networkidle"});
       await page.evaluate(() => { scheduleAI=()=>{}; });
-      await page.locator("#mpEntry").click();
+      await page.locator("#welcomeOnline").click();
       await page.locator("#mpName").fill(`Generation test ${i+1}`);
     }
     const [host, guest] = pages;
@@ -68,6 +68,7 @@ async function verifyOnline(browser) {
       page.on("console", msg => { if (msg.type() === "error") errors.push(`${msg.text()} ${msg.location().url}`); });
       await page.goto(base, { waitUntil:"networkidle" });
       assert.equal(await page.locator('[data-kind="gen1"]').count(), 4);
+      await page.locator("#welcomeSettings").click();
       assert.equal(await page.locator('[data-kind="gen2"]').count(), 4);
       await page.locator('[data-seat="1"][data-kind="gen1"]').click();
       await page.locator('[data-seat="2"][data-kind="gen2"]').click();

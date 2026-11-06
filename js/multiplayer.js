@@ -201,6 +201,7 @@ function mpUpdateBrand() {
     : `オンライン：人間${humans}人＋AI${ais}体`;
 }
 function mpOpen() {
+  document.getElementById("welcomeVideo").pause();
   document.getElementById("mpOverlay").classList.add("show");
   const fromUrl = new URLSearchParams(location.search).get("room");
   if (fromUrl) document.getElementById("mpCode").value = fromUrl.toUpperCase();
@@ -624,6 +625,7 @@ function mpBuildUi() {
   const startRow = document.querySelector("#startScreen .startrow");
   startRow.insertBefore(entry, startRow.firstChild);
   entry.onclick = mpOpen;
+  document.getElementById("welcomeOnline").onclick = mpOpen;
   document.getElementById("mpClose").onclick = mpClose;
   document.getElementById("mpCreate").onclick = mpCreate;
   document.getElementById("mpJoin").onclick = mpJoin;
@@ -641,12 +643,15 @@ async function mpResume() {
     return;
   }
   Object.assign(MP, saved);
+  const startScreen = document.getElementById("startScreen");
+  startScreen.inert = true;
   try {
     const data = await mpApi("GET", null, { code: MP.code, token: MP.token });
     MP.host = data.host; MP.seat = Number(data.seat); MP.room = data.room; MP.version = data.room.version;
     if (data.room.state) mpApply(data.room.state); else mpOpen();
     mpRenderRoom(); mpSchedulePoll(800);
   } catch (_) { mpClearSession(); if (new URLSearchParams(location.search).get("room")) mpOpen(); }
+  finally { startScreen.inert = false; }
 }
 
 window.addEventListener("DOMContentLoaded", () => {

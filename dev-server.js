@@ -5,7 +5,7 @@ const rooms = require("./api/rooms");
 const research = require("./api/research");
 const soloResearch = require("./api/solo-research");
 const root = __dirname;
-const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml" };
+const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".mp4": "video/mp4", ".jpg": "image/jpeg", ".vtt": "text/vtt; charset=utf-8" };
 
 const server = http.createServer(async (req, res) => {
   if (req.url.startsWith("/api/rooms")) return rooms(req, res);

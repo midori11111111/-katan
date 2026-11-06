@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Catan Challenger AI</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="css/styles.css?v=20261105">
+<link rel="stylesheet" href="css/styles.css?v=20261105b">
   <script defer src="js/analytics.js?v=20261029b"></script>
 <script defer src="https://buchi-dev-watch.tomoki-ashizawa.chatgpt.site/sdk.js" data-site="prj_L1DQC4LkAxb3C1rnkktMIEKi83MG"></script>
 </head>
@@ -193,11 +193,42 @@
 </div>
 
 <!-- ===== 開始画面（全画面オーバーレイ） ===== -->
-<div id="startScreen">
+<div id="startScreen" data-view="welcome">
+  <section id="welcomePanel" aria-labelledby="welcomeTitle">
+    <header class="welcome-bar">
+      <div class="welcome-brand"><img src="favicon.svg" alt="" width="32" height="32"><span>Catan Challenger AI</span></div>
+      <button id="welcomeLang" type="button" lang="ja">日本語</button>
+    </header>
+    <div class="welcome-hero">
+      <div class="welcome-copy">
+        <p class="user-milestone" data-i18n="user_milestone">3,000+ users</p>
+        <h1 id="welcomeTitle" data-i18n="welcome_title">Play Catan against AI.</h1>
+        <p class="welcome-description" data-i18n="welcome_description">Build settlements, trade resources, and race three AI opponents to 10 victory points. After the game, replay your moves turn by turn.</p>
+        <button class="welcome-play" id="welcomePlay" type="button"><span data-i18n="welcome_play">Play now</span><span aria-hidden="true">→</span></button>
+        <div class="welcome-links">
+          <button id="welcomeSettings" type="button" data-i18n="setup_title">Game setup</button>
+          <button id="welcomeOnline" type="button" data-i18n="welcome_online">Play with friends</button>
+        </div>
+        <details class="welcome-data">
+          <summary data-i18n="welcome_data">How game data is used</summary>
+          <p data-i18n="research_notice"></p>
+          <p data-i18n="analytics_notice"></p>
+        </details>
+      </div>
+      <figure class="welcome-island">
+        <video id="welcomeVideo" controls playsinline preload="none" poster="media/match-preview.jpg" aria-labelledby="welcomeVideoCaption">
+          <source src="media/match-preview.mp4" type="video/mp4">
+          <track kind="captions" srclang="en" label="English" src="media/match-preview.en.vtt" default>
+          <track kind="captions" srclang="ja" label="日本語" src="media/match-preview.ja.vtt">
+        </video>
+        <figcaption id="welcomeVideoCaption" data-i18n="welcome_preview">A match in 15 seconds</figcaption>
+      </figure>
+    </div>
+  </section>
   <div class="startcard">
     <div class="start-heading">
       <h2 data-i18n="setup_title">Game setup</h2>
-      <span class="user-milestone" data-i18n="user_milestone">3,000+ users</span>
+      <button class="btn sm ghost" id="welcomeBack" type="button" data-i18n="welcome_back">Back</button>
     </div>
     <div id="startTop"></div>
     <div class="lead" data-i18n-html="setup_lead"></div>
@@ -233,7 +264,7 @@
 <script src="js/engine.js?v=20261007a"></script>
 <script src="js/setup-learning-model.js?v=20261007a"></script>
 <script src="js/setup-learning.js?v=20261007a"></script>
-<script src="js/app.js?v=20261105"></script>
-<script src="js/multiplayer.js?v=20261105"></script>
+<script src="js/app.js?v=20261105b"></script>
+<script src="js/multiplayer.js?v=20261105b"></script>
 </body>
 </html>

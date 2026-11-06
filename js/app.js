@@ -29,6 +29,10 @@ const I18N = {
     mode_pc:"PC表示", mode_mobile:"スマホ表示",
     setup_title:"対局の設定",
     user_milestone:"累計ユーザー 3,000人以上",
+    welcome_title:"カタンでAIに挑戦。",
+    welcome_preview:"15秒で見る対局の流れ",
+    welcome_description:"開拓地を建て、資源を交換し、3体のAIより先に10点を目指そう。対局後は棋譜で一手ずつ振り返れます。",
+    welcome_play:"やってみる", welcome_online:"友達と対戦", welcome_back:"紹介に戻る", welcome_data:"対局データの利用について",
     analytics_notice:"閲覧数・流入元・対局の開始/完了を匿名集計します。アクセス解析には名前・部屋コード・手札を含めません。",
     online_play:"🌐 オンライン対戦",
     mp_title:"オンライン対戦",
@@ -123,6 +127,10 @@ const I18N = {
     mode_pc:"PC view", mode_mobile:"Mobile view",
     setup_title:"Game setup",
     user_milestone:"3,000+ users",
+    welcome_title:"Play Catan against AI.",
+    welcome_preview:"A match in 15 seconds",
+    welcome_description:"Build settlements, trade resources, and race three AI opponents to 10 victory points. After the game, replay your moves turn by turn.",
+    welcome_play:"Play now", welcome_online:"Play with friends", welcome_back:"Back", welcome_data:"How game data is used",
     analytics_notice:"We collect anonymous statistics on visits, referrals, and games started or completed. Names, room codes, and hands are excluded.",
     online_play:"🌐 Play online",
     mp_title:"Online multiplayer",
@@ -261,9 +269,10 @@ function jaToEn(s){
    ============================================================ */
 // 各席の担当: "human" / "cpure"(挑戦者=関与なし) / "challenger"(人間模倣) / "puremodel"(現行AI)
 // 既定は「あなた vs 3変種を1席ずつ」＝3種を直接見比べられる構成（開始画面で自由に変更可）
-let seatKind = {1:"strong",2:"strong",3:"human",4:"strong"};   // 既定＝あなたが3番手(P3) vs 最強AI3人
+const defaultSoloSeats = {1:"strong",2:"strong",3:"human",4:"strong"};
+let seatKind = {...defaultSoloSeats};
 let humanSeat = 3;   // 先頭の人間席（開始時に導出。単一参照が要る箇所の既定フォーカス用）
-let seatAI = {1:"strong",2:"strong",3:"human",4:"strong"};
+let seatAI = {...defaultSoloSeats};
 let paused = false;
 let evalOn = false;
 let winMeterOn = false;
@@ -1140,6 +1149,7 @@ function newMatch(){
   clearTimeout(aiTimer); aiBusy=false; stopRvPlay();
   if(replay) replay.active=false; $("replayBar").style.display="none"; document.body.classList.remove("replaying");
   if(game) endGameMode();
+  $("startScreen").dataset.view="setup";
   $("startScreen").classList.remove("hidden");
   $("exportBtn").disabled=true; $("replayBtn").disabled=true; _overHandled=false;
   render();
@@ -1182,7 +1192,14 @@ function setMobileTab(name){
 }
 
 /* ---- 言語 ---- */
-function updateLangBtn(){ $("langBtn").textContent = (LANG==="ja")?"English":"日本語"; }
+function updateLangBtn(){
+  const next = LANG === "ja" ? "en" : "ja";
+  for (const id of ["langBtn","welcomeLang"]) {
+    const button = $(id);
+    button.lang = next;
+    button.textContent = next === "en" ? "English" : "日本語";
+  }
+}
 function setLang(l){
   if (l !== "ja" && l !== "en") return;
   try { localStorage.setItem("catan_language", l); } catch (_) { /* Session-only choice. */ }
@@ -1198,6 +1215,9 @@ function applyLang(){
   document.body.setAttribute("data-lang", LANG);
   document.documentElement.lang = LANG;
   document.title = t("brand_title");
+  for (const track of $("welcomeVideo").textTracks) {
+    track.mode = track.language === LANG ? "showing" : "disabled";
+  }
   applyTextLabels(document);
   document.querySelectorAll("[data-i18n-html]").forEach(el=>{ el.innerHTML=t(el.dataset.i18nHtml); });
   updatePauseBtn(); updateEvalBtn(); updateWinMeter(); updateLangBtn(); updateModeBtn(); updatePlacementModeButton(); setSpeed(aiSpeedSec); updateRvButtons();
@@ -1420,6 +1440,23 @@ function wireControls(){
   $("speedRange").oninput=(e)=>setSpeed(parseFloat(e.target.value));
   $("shuffleBtn").onclick=()=>{ randomBoard(); randomPorts(); render(); toast(t("toast_shuffle")); };
   $("startBtn").onclick=startMatch;
+  $("welcomeLang").onclick=toggleLang;
+  $("welcomeSettings").onclick=()=>{
+    $("welcomeVideo").pause();
+    $("startScreen").dataset.view="setup";
+    $("welcomeBack").focus();
+  };
+  $("welcomeBack").onclick=()=>{
+    $("startScreen").dataset.view="welcome";
+    $("welcomeSettings").focus();
+  };
+  $("welcomePlay").onclick=()=>{
+    $("welcomeVideo").pause();
+    seatKind={...defaultSoloSeats};
+    buildStartScreen();
+    startMatch();
+    $("startScreen").dataset.view="setup";
+  };
 
   $("rvPrev").onclick=()=>{ if(replay){ stopRvPlay(); replay.idx=Math.max(0,replay.idx-1); showReplayTurn(); } };
   $("rvNext").onclick=()=>{ if(replay){ stopRvPlay(); replay.idx=Math.min(replay.turns.length-1,replay.idx+1); showReplayTurn(); } };
