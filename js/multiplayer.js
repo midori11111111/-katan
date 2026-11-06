@@ -579,34 +579,35 @@ function mpBuildUi() {
   overlay.id = "mpOverlay";
   overlay.innerHTML = `
     <div class="mpcard">
-      <button id="mpClose" class="mpclose" aria-label="閉じる">×</button>
-      <h2>オンライン対戦</h2>
-      <p class="mplead">人間2〜3人で対戦し、残りの席には選択した世代のAIが入ります。</p>
-      <p class="mplead">AI改善のため、表示名を除いた対局手順を匿名で保存します。</p>
+      <button id="mpClose" class="mpclose" data-i18n-label="mp_close">×</button>
+      <h2 data-i18n="mp_title"></h2>
+      <p class="mplead" data-i18n="mp_intro"></p>
+      <p class="mplead" data-i18n="mp_privacy"></p>
       <div id="mpJoinPane">
-        <label>表示名<input id="mpName" maxlength="20" autocomplete="nickname" placeholder="あなたの名前"></label>
-        <label>新しい部屋の構成<select id="mpHumanCount"><option value="3">人間3人＋AI1体</option><option value="2">人間2人＋AI2体</option></select></label>
-        <label>対戦するAI<select id="mpAiKind"><option value="strong">最強AI（gen0）</option><option value="gen1">gen1 AI（配置学習100%）</option><option value="gen2">gen2 AI（配置学習50%）</option></select></label>
-        <p class="mplead">%は配置の判断に使う学習モデルの比重で、勝率ではありません。本編は各世代共通です。</p>
-        <label class="mpdebug-create"><input id="mpDebugCreate" type="checkbox"> デバッグ部屋にする（ホストが各席を手動操作可能）</label>
-        <div class="mpbuttons"><button id="mpCreate" class="btn primary">新しい部屋を作る</button></div>
-        <div class="mpor">または</div>
-        <label>6桁の部屋コード<input id="mpCode" maxlength="6" autocomplete="off" placeholder="ABC234"></label>
-        <div class="mpbuttons"><button id="mpJoin" class="btn">部屋に参加</button></div>
+        <label><span data-i18n="mp_name"></span><input id="mpName" maxlength="20" autocomplete="nickname" data-i18n-placeholder="mp_name_hint"></label>
+        <label><span data-i18n="mp_format"></span><select id="mpHumanCount"><option value="3" data-i18n="mp_three"></option><option value="2" data-i18n="mp_two"></option></select></label>
+        <label><span data-i18n="mp_ai"></span><select id="mpAiKind"><option value="strong" data-i18n="strong_full"></option><option value="gen1" data-i18n="gen1_full"></option><option value="gen2" data-i18n="gen2_full"></option></select></label>
+        <p class="mplead" data-i18n="mp_weights"></p>
+        <label class="mpdebug-create"><input id="mpDebugCreate" type="checkbox"> <span data-i18n="mp_debug"></span></label>
+        <div class="mpbuttons"><button id="mpCreate" class="btn primary" data-i18n="mp_create"></button></div>
+        <div class="mpor" data-i18n="mp_or"></div>
+        <label><span data-i18n="mp_code"></span><input id="mpCode" maxlength="6" autocomplete="off" placeholder="ABC234"></label>
+        <div class="mpbuttons"><button id="mpJoin" class="btn" data-i18n="mp_join"></button></div>
       </div>
       <div id="mpRoomPane" hidden>
-        <div class="mpcode">部屋コード <b id="mpRoomCode"></b></div>
+        <div class="mpcode"><span data-i18n="mp_roomcode"></span> <b id="mpRoomCode"></b></div>
         <div id="mpSeats"></div>
         <p id="mpWait"></p>
         <input id="mpInviteUrl" class="mpinvite" readonly>
         <div class="mpbuttons">
-          <button id="mpCopy" class="btn">招待URLをコピー</button>
-          <button id="mpStart" class="btn primary">対局開始</button>
+          <button id="mpCopy" class="btn" data-i18n="mp_copy"></button>
+          <button id="mpStart" class="btn primary" data-i18n="start_btn"></button>
         </div>
-        <button id="mpLeave" class="mplink">この部屋から退出</button>
+        <button id="mpLeave" class="mplink" data-i18n="mp_leave"></button>
       </div>
       <div id="mpStatus" class="mpstatus"></div>
     </div>`;
+  applyTextLabels(overlay);
   document.body.appendChild(overlay);
   const debugDock = document.createElement("div");
   debugDock.id = "mpDebugDock"; debugDock.className = "mpdebugdock"; debugDock.hidden = true;
@@ -618,7 +619,8 @@ function mpBuildUi() {
   syncBadge.id = "mpSyncBadge"; syncBadge.className = "mpsyncbadge"; syncBadge.hidden = true;
   document.body.appendChild(syncBadge);
   const entry = document.createElement("button");
-  entry.id = "mpEntry"; entry.className = "btn good"; entry.textContent = "🌐 オンライン対戦";
+  entry.id = "mpEntry"; entry.className = "btn good";
+  entry.dataset.i18n = "online_play"; entry.textContent = t("online_play");
   const startRow = document.querySelector("#startScreen .startrow");
   startRow.insertBefore(entry, startRow.firstChild);
   entry.onclick = mpOpen;

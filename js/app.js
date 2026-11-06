@@ -13,7 +13,10 @@ const $ = (id)=>document.getElementById(id);
 /* ============================================================
    i18n
    ============================================================ */
-let LANG = "ja";
+let LANG = "en";
+try {
+  if (localStorage.getItem("catan_language") === "ja") LANG = "ja";
+} catch (_) { /* Language switching also works without browser storage. */ }
 const I18N = {
   ja:{
     brand_title:"カタン 挑戦者AI 対局", brand_sub:"あなた 対 AI3人",
@@ -25,6 +28,28 @@ const I18N = {
     pause_title:"一時停止", play_title:"再生",
     mode_pc:"PC表示", mode_mobile:"スマホ表示",
     setup_title:"対局の設定",
+    user_milestone:"累計ユーザー 3,000人以上",
+    analytics_notice:"閲覧数・流入元・対局の開始/完了を匿名集計します。アクセス解析には名前・部屋コード・手札を含めません。",
+    online_play:"🌐 オンライン対戦",
+    mp_title:"オンライン対戦",
+    mp_close:"閉じる",
+    mp_intro:"人間2〜3人で対戦し、残りの席には選択した世代のAIが入ります。",
+    mp_privacy:"AI改善のため、表示名を除いた対局手順を匿名で保存します。",
+    mp_name:"表示名",
+    mp_name_hint:"あなたの名前",
+    mp_format:"新しい部屋の構成",
+    mp_three:"人間3人＋AI1体",
+    mp_two:"人間2人＋AI2体",
+    mp_ai:"対戦するAI",
+    mp_weights:"%は配置の判断に使う学習モデルの比重で、勝率ではありません。本編は各世代共通です。",
+    mp_debug:"デバッグ部屋にする（ホストが各席を手動操作可能）",
+    mp_create:"新しい部屋を作る",
+    mp_or:"または",
+    mp_code:"6桁の部屋コード",
+    mp_join:"部屋に参加",
+    mp_roomcode:"部屋コード",
+    mp_copy:"招待URLをコピー",
+    mp_leave:"この部屋から退出",
     research_notice:"AI改善のため、表示名・認証情報を含まない対局手順とコメントを匿名で保存します。",
     setup_lead:"各席の担当を選んで対局。gen1・gen2は自己対戦で学習した初期配置モデルです。<br>100%・50%は配置判断での学習モデルの比重で、勝率ではありません。本編は最強AIと共通。無敵AIは探索を追加します。",
     your_seat:"あなたの席", you_operate:"あなた（この席を操作）",
@@ -97,6 +122,28 @@ const I18N = {
     pause_title:"Pause", play_title:"Play",
     mode_pc:"PC view", mode_mobile:"Mobile view",
     setup_title:"Game setup",
+    user_milestone:"3,000+ users",
+    analytics_notice:"We collect anonymous statistics on visits, referrals, and games started or completed. Names, room codes, and hands are excluded.",
+    online_play:"🌐 Play online",
+    mp_title:"Online multiplayer",
+    mp_close:"Close",
+    mp_intro:"Play with two or three people. Your chosen AI fills the remaining seats.",
+    mp_privacy:"Game actions are saved anonymously to improve the AI.",
+    mp_name:"Display name",
+    mp_name_hint:"Your name",
+    mp_format:"Room setup",
+    mp_three:"3 humans + 1 AI",
+    mp_two:"2 humans + 2 AIs",
+    mp_ai:"AI opponent",
+    mp_weights:"The percentage is the learned model’s weight in settlement placement. All generations use the same strategy after setup.",
+    mp_debug:"Debug room (host can control every seat)",
+    mp_create:"Create room",
+    mp_or:"or",
+    mp_code:"6-character room code",
+    mp_join:"Join room",
+    mp_roomcode:"Room code",
+    mp_copy:"Copy invite link",
+    mp_leave:"Leave room",
     research_notice:"To improve the AI, game actions and comments are stored anonymously without display names or authentication data.",
     setup_lead:"Choose each seat, then start. gen1 and gen2 use self-play-trained setup models.<br>100% and 50% are learned setup ranking weights, not win rates. Main-game play is shared with Strongest AI. Invincible adds search.",
     your_seat:"Your seat", you_operate:"You (you play this seat)",
@@ -1136,13 +1183,22 @@ function setMobileTab(name){
 
 /* ---- 言語 ---- */
 function updateLangBtn(){ $("langBtn").textContent = (LANG==="ja")?"English":"日本語"; }
-function setLang(l){ if(l!==LANG){ LANG=l; applyLang(); } }
+function setLang(l){
+  if (l !== "ja" && l !== "en") return;
+  try { localStorage.setItem("catan_language", l); } catch (_) { /* Session-only choice. */ }
+  if (l !== LANG) { LANG = l; applyLang(); }
+}
 function toggleLang(){ setLang(LANG==="ja"?"en":"ja"); }
+function applyTextLabels(root){
+  root.querySelectorAll("[data-i18n]").forEach(el=>{ el.textContent=t(el.dataset.i18n); });
+  root.querySelectorAll("[data-i18n-placeholder]").forEach(el=>{ el.placeholder=t(el.dataset.i18nPlaceholder); });
+  root.querySelectorAll("[data-i18n-label]").forEach(el=>{ el.setAttribute("aria-label", t(el.dataset.i18nLabel)); });
+}
 function applyLang(){
   document.body.setAttribute("data-lang", LANG);
   document.documentElement.lang = LANG;
   document.title = t("brand_title");
-  document.querySelectorAll("[data-i18n]").forEach(el=>{ el.textContent=t(el.dataset.i18n); });
+  applyTextLabels(document);
   document.querySelectorAll("[data-i18n-html]").forEach(el=>{ el.innerHTML=t(el.dataset.i18nHtml); });
   updatePauseBtn(); updateEvalBtn(); updateWinMeter(); updateLangBtn(); updateModeBtn(); updatePlacementModeButton(); setSpeed(aiSpeedSec); updateRvButtons();
   buildTradeSelects(); buildStartScreen();

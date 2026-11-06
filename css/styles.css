@@ -283,6 +283,9 @@ body[data-mode="mobile"] .rescard .cnt{font-size:16px}
 .segb{border:1px solid var(--line); background:var(--panel2); color:var(--muted); border-radius:8px; padding:6px 13px; cursor:pointer; font-weight:700; font-size:13px}
 .segb.on{border-color:var(--gold); color:#fff; box-shadow:0 0 0 1px var(--gold) inset}
 .startcard h2{font-size:19px; font-weight:800; margin:10px 0 4px}
+.start-heading{display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:4px 12px; margin-bottom:12px}
+.start-heading h2{margin:0}
+.user-milestone{color:var(--gold); font-size:14px; font-weight:700}
 .startcard .lead{color:var(--muted); font-size:13px; margin-bottom:14px}
 .startcard .researchnotice{color:var(--muted); font-size:12px; line-height:1.45; margin:0 0 14px; padding:8px 10px; border-left:3px solid var(--accent); background:rgba(25,118,210,.06)}
 .startcard .sublabel{color:var(--muted); font-size:13px; margin-bottom:8px}

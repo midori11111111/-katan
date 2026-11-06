@@ -1,21 +1,21 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<title>カタン 挑戦者AI 対局</title>
+<title>Catan Challenger AI</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<link rel="stylesheet" href="css/styles.css?v=20260903b">
+<link rel="stylesheet" href="css/styles.css?v=20261105">
   <script defer src="js/analytics.js?v=20261029b"></script>
 <script defer src="https://buchi-dev-watch.tomoki-ashizawa.chatgpt.site/sdk.js" data-site="prj_L1DQC4LkAxb3C1rnkktMIEKi83MG"></script>
 </head>
-<body data-mode="pc" data-lang="ja">
+<body data-mode="pc" data-lang="en">
 
 <!-- ===== 上部バー ===== -->
 <div class="topbar">
   <div class="brand">
-    <h1><span data-i18n="brand_title">カタン 挑戦者AI 対局</span></h1>
-    <span class="sub" data-i18n="brand_sub">あなた 対 AI3人</span>
+    <h1><span data-i18n="brand_title">Catan Challenger AI</span></h1>
+    <span class="sub" data-i18n="brand_sub">You vs 3 AIs</span>
   </div>
   <div class="spacer"></div>
   <div class="ctrl">
@@ -195,20 +195,23 @@
 <!-- ===== 開始画面（全画面オーバーレイ） ===== -->
 <div id="startScreen">
   <div class="startcard">
+    <div class="start-heading">
+      <h2 data-i18n="setup_title">Game setup</h2>
+      <span class="user-milestone" data-i18n="user_milestone">3,000+ users</span>
+    </div>
     <div id="startTop"></div>
-    <h2 data-i18n="setup_title">対局の設定</h2>
     <div class="lead" data-i18n-html="setup_lead"></div>
-    <p class="researchnotice" data-i18n="research_notice">AI改善のため、表示名・認証情報を含まない対局手順とコメントを匿名で保存します。</p>
-    <p class="researchnotice">閲覧数・流入元・対局の開始/完了を匿名集計します。アクセス解析には名前・部屋コード・手札を含めません。</p>
-    <div class="sublabel" data-i18n="your_seat">あなたの席</div>
+    <p class="researchnotice" data-i18n="research_notice">To improve the AI, game actions and comments are stored anonymously without display names or authentication data.</p>
+    <p class="researchnotice" data-i18n="analytics_notice">We collect anonymous statistics on visits, referrals, and games started or completed. Names, room codes, and hands are excluded.</p>
+    <div class="sublabel" data-i18n="your_seat">Your seat</div>
     <div class="seatpick" id="seatPick"></div>
     <div class="seatgrid" id="seatGrid"></div>
     <div class="startrow">
-      <button id="shuffleBtn" class="btn" data-i18n="shuffle_btn">盤面シャッフル</button>
-      <button id="startLoadBtn" class="btn" data-i18n="load_btn">棋譜読込</button>
-      <button id="startComposerBtn" class="btn" data-i18n="composer_btn">手動で配置を作る</button>
+      <button id="shuffleBtn" class="btn" data-i18n="shuffle_btn">Shuffle board</button>
+      <button id="startLoadBtn" class="btn" data-i18n="load_btn">Load record</button>
+      <button id="startComposerBtn" class="btn" data-i18n="composer_btn">Build board</button>
       <div class="spacer"></div>
-      <button id="startBtn" class="btn primary" data-i18n="start_btn">対局開始</button>
+      <button id="startBtn" class="btn primary" data-i18n="start_btn">Start game</button>
     </div>
   </div>
 </div>
@@ -230,7 +233,7 @@
 <script src="js/engine.js?v=20261007a"></script>
 <script src="js/setup-learning-model.js?v=20261007a"></script>
 <script src="js/setup-learning.js?v=20261007a"></script>
-<script src="js/app.js?v=20261007a"></script>
-<script src="js/multiplayer.js?v=20261007a"></script>
+<script src="js/app.js?v=20261105"></script>
+<script src="js/multiplayer.js?v=20261105"></script>
 </body>
 </html>
